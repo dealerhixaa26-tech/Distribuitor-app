@@ -1,0 +1,18 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# Dependencies permitted to run install/build scripts. pnpm blocks these by
+# default (supply-chain hardening — see docs/06-security.md T12), so each entry
+# is a deliberate decision rather than a blanket opt-in.
+allowBuilds:
+  esbuild: true # vitest bundler — native binary
+  '@swc/core': true # nest build / jest transform — native binary
+  prisma: true # generates the query engine
+  '@prisma/client': true # generates the typed client
+  '@prisma/engines': true # downloads matching engine binaries
+  argon2: true # node-gyp native build for password hashing
+  unrs-resolver: true # eslint module resolution — native binary
+  sharp: true # image processing for product media
+  msgpackr-extract: true # bullmq msgpack accelerator — pure-JS fallback exists
+  '@scarf/scarf': false # analytics/telemetry beacon — deliberately declined

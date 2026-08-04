@@ -1,0 +1,22 @@
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/coverage
+**/playwright-report
+**/test-results
+
+.git
+.github
+docs
+storage
+backups
+*.log
+
+# Never let a real secret into a build context.
+.env
+.env.*
+!.env.example
+
+**/.DS_Store
+**/*.tsbuildinfo

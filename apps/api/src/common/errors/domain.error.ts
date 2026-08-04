@@ -1,0 +1,193 @@
+import { ERROR_CODES, type ErrorCode, type FieldError } from '@hixaa/contracts';
+
+/**
+ * Domain error hierarchy.
+ *
+ * Services throw these; they know nothing about HTTP. `AllExceptionsFilter`
+ * translates them into RFC 7807 Problem Details at the edge. That separation is
+ * what lets the same service back a REST controller today and a queue consumer
+ * or GraphQL resolver later without change.
+ */
+export abstract class DomainError extends Error {
+  abstract readonly code: ErrorCode;
+  abstract readonly status: number;
+
+  /** Safe to expose to the caller. Anything sensitive stays in `context`. */
+  readonly fieldErrors?: FieldError[];
+  /** Logged, never serialised to the client. */
+  readonly context?: Record<string, unknown>;
+
+  constructor(message: string, options?: { fieldErrors?: FieldError[]; context?: Record<string, unknown> }) {
+    super(message);
+    this.name = new.target.name;
+    this.fieldErrors = options?.fieldErrors;
+    this.context = options?.context;
+    Error.captureStackTrace?.(this, new.target);
+  }
+}
+
+// ── 4xx — client ────────────────────────────────────────────────────────────
+
+export class ValidationError extends DomainError {
+  readonly code = ERROR_CODES.VALIDATION_FAILED;
+  readonly status = 422;
+
+  constructor(message = 'The submitted data is invalid', fieldErrors?: FieldError[]) {
+    super(message, { fieldErrors });
+  }
+}
+
+/**
+ * Also thrown when a record exists but is outside the caller's scope.
+ *
+ * Returning 404 rather than 403 in that case is deliberate: a 403 confirms the
+ * record exists, which turns the API into an enumeration oracle for a user who
+ * should not know about it at all. See docs/03-api-design.md §3.
+ */
+export class NotFoundError extends DomainError {
+  readonly code = ERROR_CODES.NOT_FOUND;
+  readonly status = 404;
+
+  constructor(resource: string, identifier?: string) {
+    super(identifier ? `${resource} "${identifier}" was not found` : `${resource} was not found`, {
+      context: { resource, identifier },
+    });
+  }
+}
+
+export class AlreadyExistsError extends DomainError {
+  readonly code = ERROR_CODES.ALREADY_EXISTS;
+  readonly status = 409;
+
+  constructor(resource: string, field: string, value: string) {
+    super(`A ${resource} with ${field} "${value}" already exists`, {
+      fieldErrors: [{ field, code: ERROR_CODES.ALREADY_EXISTS, message: 'Already in use' }],
+      context: { resource, field },
+    });
+  }
+}
+
+export class ConflictError extends DomainError {
+  readonly code: ErrorCode = ERROR_CODES.CONFLICT;
+  readonly status = 409;
+}
+
+export class UnauthenticatedError extends DomainError {
+  readonly code: ErrorCode;
+  readonly status = 401;
+
+  constructor(message = 'Authentication is required', code: ErrorCode = ERROR_CODES.UNAUTHENTICATED) {
+    super(message);
+    this.code = code;
+  }
+}
+
+export class PermissionDeniedError extends DomainError {
+  readonly code: ErrorCode = ERROR_CODES.PERMISSION_DENIED;
+  readonly status = 403;
+
+  constructor(permission: string) {
+    super('You do not have permission to perform this action', { context: { permission } });
+  }
+}
+
+export class RateLimitedError extends DomainError {
+  readonly code = ERROR_CODES.RATE_LIMITED;
+  readonly status = 429;
+
+  constructor(readonly retryAfterSeconds: number) {
+    super('Too many requests. Please try again shortly.');
+  }
+}
+
+// ── Domain-specific conflicts ───────────────────────────────────────────────
+
+export class InvalidStateTransitionError extends DomainError {
+  readonly code = ERROR_CODES.INVALID_STATE_TRANSITION;
+  readonly status = 409;
+
+  constructor(entity: string, from: string, to: string) {
+    super(`A ${entity} cannot move from ${from} to ${to}`, { context: { entity, from, to } });
+  }
+}
+
+export class InsufficientStockError extends DomainError {
+  readonly code = ERROR_CODES.INSUFFICIENT_STOCK;
+  readonly status = 409;
+
+  constructor(warehouse: string, available: string, requested: string, field?: string) {
+    super(`Warehouse ${warehouse} has ${available} available; ${requested} requested.`, {
+      fieldErrors: field
+        ? [{ field, code: ERROR_CODES.INSUFFICIENT_STOCK, message: `Only ${available} available` }]
+        : undefined,
+      context: { warehouse, available, requested },
+    });
+  }
+}
+
+export class CreditLimitExceededError extends DomainError {
+  readonly code = ERROR_CODES.CREDIT_LIMIT_EXCEEDED;
+  readonly status = 409;
+
+  constructor(distributor: string, limit: string, exposure: string) {
+    super(
+      `This order would take ${distributor} past its credit limit of ${limit} ` +
+        `(current exposure ${exposure}).`,
+      { context: { distributor, limit, exposure } },
+    );
+  }
+}
+
+export class ImmutableRecordError extends DomainError {
+  readonly code = ERROR_CODES.INVOICE_IMMUTABLE;
+  readonly status = 409;
+
+  constructor(entity: string, remedy: string) {
+    super(`An issued ${entity} cannot be modified. ${remedy}`, { context: { entity } });
+  }
+}
+
+export class SelfApprovalError extends DomainError {
+  readonly code = ERROR_CODES.SELF_APPROVAL_FORBIDDEN;
+  readonly status = 403;
+
+  constructor(entity: string) {
+    super(`You cannot approve a ${entity} you created.`);
+  }
+}
+
+export class IdempotencyConflictError extends DomainError {
+  readonly code = ERROR_CODES.IDEMPOTENCY_KEY_REUSED;
+  readonly status = 409;
+
+  constructor() {
+    super(
+      'This Idempotency-Key has already been used with a different request body. ' +
+        'Use a new key for a new request.',
+    );
+  }
+}
+
+// ── 5xx — server ────────────────────────────────────────────────────────────
+
+export class ServiceUnavailableError extends DomainError {
+  readonly code = ERROR_CODES.SERVICE_UNAVAILABLE;
+  readonly status = 503;
+
+  constructor(dependency: string) {
+    super(`A required service is temporarily unavailable. Please retry.`, {
+      context: { dependency },
+    });
+  }
+}
+
+export class InternalError extends DomainError {
+  readonly code = ERROR_CODES.INTERNAL_ERROR;
+  readonly status = 500;
+
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, { context });
+  }
+}
+
+export const isDomainError = (error: unknown): error is DomainError => error instanceof DomainError;

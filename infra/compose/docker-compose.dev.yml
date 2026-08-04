@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Local development stack.
+#
+#   docker compose -f infra/compose/docker-compose.dev.yml up -d
+#
+# Provides the backing services only — Postgres, Redis, and a mail catcher. The
+# API and web apps run on the host under `pnpm dev` so hot reload stays fast.
+# Ports ARE published here (unlike production) so host processes can reach them.
+# ─────────────────────────────────────────────────────────────────────────────
+name: hixaa-dms-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hixaa_dms_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # C collation keeps index ordering deterministic across platforms, so a
+      # sort behaves identically on a developer's Mac and on the Linux VPS.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-hixaa_dms_dev}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # noeviction: evicting a queued job is data loss, not a cache miss.
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Catches every outbound email so nothing can reach a real customer from a
+  # developer's machine. UI at http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - '8025:8025'
+      - '1025:1025'
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+volumes:
+  pgdata:
+  redisdata:

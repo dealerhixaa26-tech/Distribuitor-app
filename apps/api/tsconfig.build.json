@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  // rootDir lives here, not in tsconfig.json: the base config also typechecks
+  // prisma/seed (run by tsx), which sits outside src and would otherwise trip
+  // TS6059. The build excludes it, so src is the correct root for emit.
+  "compilerOptions": {
+    "rootDir": "./src"
+  },
+  "exclude": ["node_modules", "dist", "test", "prisma", "**/*.spec.ts", "**/*.e2e-spec.ts"]
+}

@@ -1,0 +1,38 @@
+{
+  "name": "hixaa-dms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hixaa Technologies — Distributor Management System",
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "lint:fix": "turbo run lint -- --fix",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:unit": "turbo run test:unit",
+    "test:integration": "turbo run test:integration",
+    "test:e2e": "turbo run test:e2e",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test:unit && pnpm build",
+    "db:generate": "pnpm --filter @hixaa/api db:generate",
+    "db:migrate": "pnpm --filter @hixaa/api db:migrate",
+    "db:deploy": "pnpm --filter @hixaa/api db:deploy",
+    "db:seed": "pnpm --filter @hixaa/api db:seed",
+    "db:studio": "pnpm --filter @hixaa/api db:studio",
+    "db:reset": "pnpm --filter @hixaa/api db:reset",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,675 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Hixaa DMS — foundation schema (Phase 1)
+//
+// Conventions (docs/02-data-model.md §0):
+//   • PK          UUID v7 — time-sortable, so index locality matches insert order
+//   • Timestamps  createdAt / updatedAt everywhere; deletedAt where soft-deletable
+//   • Money       Decimal(18,4) — never float. See ADR-0004
+//   • Naming      snake_case in Postgres, camelCase in Prisma via @map
+//   • Enums       mirror @hixaa/contracts/enums exactly — one vocabulary
+//
+// Business domains (distributors, catalog, inventory, sales, finance) arrive in
+// Phases 3–8. This file is the scaffolding they attach to.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// No custom `output`: pnpm stores @prisma/client in the content-addressed
+// store, and a custom output path generates the client somewhere the
+// `@prisma/client` import cannot resolve. The default location is correct here.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ENUMS — mirror packages/contracts/src/enums.ts
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum ScopeType {
+  GLOBAL
+  TERRITORY
+  DISTRIBUTOR
+}
+
+enum ActorType {
+  USER
+  SYSTEM
+  API_KEY
+}
+
+enum AuditCategory {
+  AUTH
+  DATA
+  SECURITY
+  INTEGRATION
+}
+
+enum MfaType {
+  TOTP
+  BACKUP_CODE
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+  DEAD
+}
+
+enum MailChannel {
+  BUSINESS
+  OPS
+}
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  FAILED
+  BOUNCED
+}
+
+enum StorageProvider {
+  LOCAL
+  S3
+}
+
+enum ScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  SKIPPED
+}
+
+enum DocumentVisibility {
+  PUBLIC
+  INTERNAL
+  RESTRICTED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum NumberResetPolicy {
+  NEVER
+  YEARLY
+  MONTHLY
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// IDENTITY & ACCESS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model User {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  // Stored lowercase (enforced by emailSchema in @hixaa/contracts) so a plain
+  // unique index gives case-insensitive uniqueness without the citext extension.
+  email        String  @unique
+  passwordHash String? @map("password_hash")
+
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
+  phone     String?
+  avatarUrl String? @map("avatar_url")
+
+  status          UserStatus @default(INVITED)
+  emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(3)
+
+  // Auth hardening — see docs/06-security.md §3
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until") @db.Timestamptz(3)
+  mustChangePassword  Boolean   @default(false) @map("must_change_password")
+  passwordChangedAt   DateTime? @map("password_changed_at") @db.Timestamptz(3)
+  lastLoginAt         DateTime? @map("last_login_at") @db.Timestamptz(3)
+  lastLoginIp         String?   @map("last_login_ip")
+
+  mfaEnabled Boolean @default(false) @map("mfa_enabled")
+
+  isSystem Boolean @default(false) @map("is_system")
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+  updatedById String?   @map("updated_by_id") @db.Uuid
+
+  roles                  UserRole[]
+  sessions               Session[]
+  mfaFactors             MfaFactor[]
+  passwordResetTokens    PasswordResetToken[]
+  emailVerificationToken EmailVerificationToken[]
+  teamMemberships        TeamMember[]
+  managedTeams           Team[]                    @relation("TeamManager")
+  auditLogs              AuditLog[]
+  notifications          Notification[]
+  notificationPrefs      NotificationPreference[]
+  apiKeys                ApiKey[]
+  uploadedDocuments      Document[]
+
+  @@index([status, deletedAt])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@map("user")
+}
+
+model Role {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  key         String    @unique
+  name        String
+  description String?
+  scopeType   ScopeType @default(GLOBAL) @map("scope_type")
+
+  /// System roles are seeded and cannot be deleted or renamed.
+  isSystem Boolean @default(false) @map("is_system")
+
+  /// Approval hierarchy rank — a higher level may approve what a lower cannot.
+  level Int @default(0)
+
+  /// Monetary authority. Null means unlimited. See docs/04-rbac §4.
+  maxDiscountPercent Decimal? @map("max_discount_percent") @db.Decimal(7, 4)
+  maxOrderValue      Decimal? @map("max_order_value") @db.Decimal(18, 4)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@index([deletedAt])
+  @@map("role")
+}
+
+model Permission {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  key         String  @unique
+  resource    String
+  action      String
+  description String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  roles RolePermission[]
+
+  @@index([resource])
+  @@map("permission")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permission")
+}
+
+/// The join that carries the DATA BOUNDARY, not just the role. `scopeType` +
+/// `scopeId` is the single mechanism that will make the v2 Distributor Portal
+/// safe without a second auth system. See ADR-0003.
+model UserRole {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  roleId String @map("role_id") @db.Uuid
+
+  scopeType ScopeType @default(GLOBAL) @map("scope_type")
+  /// Null when scopeType is GLOBAL; a territory or distributor id otherwise.
+  scopeId   String?   @map("scope_id") @db.Uuid
+
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz(3)
+  assignedById String?   @map("assigned_by_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId, scopeType, scopeId])
+  @@index([userId])
+  @@index([roleId])
+  @@index([scopeType, scopeId])
+  @@map("user_role")
+}
+
+/// Refresh-token lineage. `familyId` groups a rotation chain so that replaying a
+/// rotated token can revoke the entire family. See docs/04-rbac §6.
+model Session {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// SHA-256 of the opaque refresh token. The raw value is never stored.
+  refreshTokenHash String  @unique @map("refresh_token_hash")
+  familyId         String  @map("family_id") @db.Uuid
+  replacedById     String? @map("replaced_by_id") @db.Uuid
+
+  ipAddress  String? @map("ip_address")
+  userAgent  String? @map("user_agent")
+  rememberMe Boolean @default(false) @map("remember_me")
+
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedReason String?   @map("revoked_reason")
+  lastUsedAt    DateTime? @map("last_used_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("session")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  ipAddress String?   @map("ip_address")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_token")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  email     String
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_token")
+}
+
+model MfaFactor {
+  id     String  @id @default(uuid(7)) @db.Uuid
+  userId String  @map("user_id") @db.Uuid
+  type   MfaType @default(TOTP)
+
+  /// AES-256-GCM encrypted at rest. See docs/06-security.md §7.
+  secretEncrypted String  @map("secret_encrypted")
+  /// Hashed single-use recovery codes.
+  backupCodes     String[] @map("backup_codes")
+
+  confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz(3)
+  lastUsedAt  DateTime? @map("last_used_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+  @@map("mfa_factor")
+}
+
+model Team {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  name        String
+  description String?
+  managerId   String? @map("manager_id") @db.Uuid
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  manager User?        @relation("TeamManager", fields: [managerId], references: [id], onDelete: SetNull)
+  members TeamMember[]
+
+  @@index([deletedAt])
+  @@map("team")
+}
+
+model TeamMember {
+  teamId String @map("team_id") @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  role   String @default("MEMBER")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([teamId, userId])
+  @@index([userId])
+  @@map("team_member")
+}
+
+model ApiKey {
+  id     String @id @default(uuid(7)) @db.Uuid
+  name   String
+  /// SHA-256 of the key. The raw value is shown once, at creation.
+  keyHash String @unique @map("key_hash")
+  prefix  String
+
+  userId      String    @map("user_id") @db.Uuid
+  permissions String[]
+  lastUsedAt  DateTime? @map("last_used_at") @db.Timestamptz(3)
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz(3)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("api_key")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AUDIT
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Append-only. The application database role is granted only INSERT and SELECT
+/// on this table; no update or delete path exists in code.
+/// Partitioned by month in production — see docs/02-data-model.md §10.
+model AuditLog {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  actorUserId String?   @map("actor_user_id") @db.Uuid
+  actorType   ActorType @default(USER) @map("actor_type")
+  actorLabel  String?   @map("actor_label")
+
+  category AuditCategory @default(DATA)
+  action   String
+
+  entityType String? @map("entity_type")
+  entityId   String? @map("entity_id")
+
+  before Json?
+  after  Json?
+
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+  requestId String? @map("request_id")
+
+  metadata Json?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([actorUserId, createdAt(sort: Desc)])
+  @@index([category, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_log")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TRANSACTIONAL OUTBOX — see ADR-0005
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Written inside the business transaction; published after commit by the
+/// dispatcher worker. Guarantees no side effect is ever announced for a
+/// transaction that rolled back, and keeps every third-party call off the
+/// request path.
+model OutboxEvent {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  aggregateType String @map("aggregate_type")
+  aggregateId   String @map("aggregate_id")
+  eventType     String @map("event_type")
+
+  payload Json
+
+  status   OutboxStatus @default(PENDING)
+  attempts Int          @default(0)
+
+  /// Backoff target. The dispatcher only picks up rows whose time has come.
+  availableAt DateTime  @default(now()) @map("available_at") @db.Timestamptz(3)
+  processedAt DateTime? @map("processed_at") @db.Timestamptz(3)
+  lastError   String?   @map("last_error")
+
+  actorUserId String? @map("actor_user_id") @db.Uuid
+  requestId   String? @map("request_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  // The dispatcher's poll. A partial index on this pair keeps the query fast
+  // regardless of how large the processed history grows.
+  @@index([status, availableAt])
+  @@index([aggregateType, aggregateId])
+  @@map("outbox_event")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MAIL & NOTIFICATIONS
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Every send is logged with its CHANNEL, so a business email appearing on the
+/// ops transport (or vice versa) is visible in data as well as impossible in
+/// types. See docs/07-integrations.md §1.
+model EmailLog {
+  id      String      @id @default(uuid(7)) @db.Uuid
+  channel MailChannel
+
+  toAddress String   @map("to_address")
+  ccAddress String[] @map("cc_address")
+  subject   String
+  template  String
+
+  status            EmailStatus @default(QUEUED)
+  providerMessageId String?     @map("provider_message_id")
+  attempts          Int         @default(0)
+  error             String?
+  sentAt            DateTime?   @map("sent_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([channel, status])
+  @@index([toAddress])
+  @@index([createdAt(sort: Desc)])
+  @@map("email_log")
+}
+
+model Notification {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  type     String
+  title    String
+  body     String
+  data     Json?
+  priority NotificationPriority @default(NORMAL)
+
+  actionUrl String?   @map("action_url")
+  readAt    DateTime? @map("read_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt(sort: Desc)])
+  @@map("notification")
+}
+
+model NotificationPreference {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  type   String
+
+  channels NotificationChannel[]
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+  @@map("notification_preference")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// DOCUMENTS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Document {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  storageKey String          @unique @map("storage_key")
+  provider   StorageProvider @default(LOCAL)
+
+  originalName String @map("original_name")
+  mimeType     String @map("mime_type")
+  sizeBytes    BigInt @map("size_bytes")
+  /// Integrity check and cheap deduplication key.
+  checksumSha256 String @map("checksum_sha256")
+
+  /// A document stays undownloadable until a scanner clears it. The NoOp driver
+  /// marks SKIPPED in dev; ClamAV sets CLEAN or INFECTED in production.
+  scanStatus ScanStatus @default(PENDING) @map("scan_status")
+  scanEngine String?    @map("scan_engine")
+  scannedAt  DateTime?  @map("scanned_at") @db.Timestamptz(3)
+
+  visibility DocumentVisibility @default(INTERNAL)
+
+  uploadedById String? @map("uploaded_by_id") @db.Uuid
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  uploadedBy User?          @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  links      DocumentLink[]
+
+  @@index([checksumSha256])
+  @@index([scanStatus])
+  @@index([deletedAt])
+  @@map("document")
+}
+
+/// Generic attachment join — lets any entity own documents without a foreign key
+/// per owner type.
+model DocumentLink {
+  id         String @id @default(uuid(7)) @db.Uuid
+  documentId String @map("document_id") @db.Uuid
+
+  entityType String @map("entity_type")
+  entityId   String @map("entity_id") @db.Uuid
+  purpose    String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, entityType, entityId, purpose])
+  @@index([entityType, entityId])
+  @@map("document_link")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SYSTEM
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// How "nothing about the company is hardcoded" is honoured. Company profile,
+/// branding, service lines, industries, approval ceilings, and feature flags all
+/// live here — seeded on first boot, editable from the Admin Panel thereafter.
+model SystemSetting {
+  id       String @id @default(uuid(7)) @db.Uuid
+  category String
+  key      String
+  value    Json
+
+  description String?
+  /// Secret values are redacted in API responses and never sent to Sheets.
+  isSecret    Boolean @default(false) @map("is_secret")
+
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([category, key])
+  @@index([category])
+  @@map("system_setting")
+}
+
+/// Gapless business number allocation. Consumed inside the same transaction as
+/// the document it numbers, with SELECT … FOR UPDATE, so a rolled-back
+/// transaction never burns a number. Critical for GST invoice series.
+model NumberSequence {
+  id     String @id @default(uuid(7)) @db.Uuid
+  key    String @unique
+  prefix String
+
+  nextValue Int @default(1) @map("next_value")
+  padding   Int @default(5)
+
+  financialYear String?           @map("financial_year")
+  resetPolicy   NumberResetPolicy @default(YEARLY) @map("reset_policy")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("number_sequence")
+}
+
+/// Makes a retried money-moving POST safe. Same key + same body replays the
+/// stored response; same key + different body is a 409.
+model IdempotencyKey {
+  id  String @id @default(uuid(7)) @db.Uuid
+  key String
+
+  userId      String  @map("user_id") @db.Uuid
+  endpoint    String
+  requestHash String  @map("request_hash")
+
+  responseStatus Int?  @map("response_status")
+  responseBody   Json? @map("response_body")
+
+  lockedAt  DateTime? @map("locked_at") @db.Timestamptz(3)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([key, userId, endpoint])
+  @@index([expiresAt])
+  @@map("idempotency_key")
+}
+
+model FeatureFlag {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  key         String  @unique
+  enabled     Boolean @default(false)
+  description String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("feature_flag")
+}

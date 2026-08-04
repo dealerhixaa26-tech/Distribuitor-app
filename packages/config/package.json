@@ -1,0 +1,26 @@
+{
+  "name": "@hixaa/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./eslint/base": "./eslint/base.js",
+    "./eslint/nest": "./eslint/nest.js",
+    "./eslint/next": "./eslint/next.js",
+    "./tsconfig/base.json": "./tsconfig/base.json",
+    "./tsconfig/library.json": "./tsconfig/library.json",
+    "./tsconfig/nest.json": "./tsconfig/nest.json",
+    "./tsconfig/next.json": "./tsconfig/next.json"
+  },
+  "files": ["eslint", "tsconfig"],
+  "scripts": {
+    "lint": "echo \"@hixaa/config: nothing to lint\"",
+    "typecheck": "echo \"@hixaa/config: nothing to typecheck\""
+  },
+  "dependencies": {
+    "@eslint/js": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "globals": "^15.14.0",
+    "typescript-eslint": "^8.20.0"
+  }
+}

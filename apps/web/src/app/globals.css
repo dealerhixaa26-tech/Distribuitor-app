@@ -1,0 +1,175 @@
+@import 'tailwindcss';
+
+/**
+ * Design tokens — docs/08-frontend-and-ux.md §2.
+ *
+ * Components never reference a raw colour, only a semantic token. That is what
+ * makes dark mode a token swap rather than a component-by-component audit, and
+ * what will let the brand palette be driven from SystemSetting later without
+ * touching a single component.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 224 71% 4%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 224 71% 4%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 224 71% 4%;
+
+  --muted: 220 14% 96%;
+  --muted-foreground: 220 9% 46%;
+
+  --accent: 220 14% 96%;
+  --accent-foreground: 224 71% 4%;
+
+  /* Hixaa industrial blue — placeholder until the official palette arrives. */
+  --primary: 211 100% 36%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 220 14% 96%;
+  --secondary-foreground: 224 71% 4%;
+
+  --success: 142 71% 32%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 40%;
+  --warning-foreground: 0 0% 100%;
+  --destructive: 0 72% 44%;
+  --destructive-foreground: 0 0% 100%;
+  --info: 199 89% 38%;
+  --info-foreground: 0 0% 100%;
+
+  --border: 220 13% 91%;
+  --input: 220 13% 91%;
+  --ring: 211 100% 36%;
+
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: 224 71% 4%;
+  --foreground: 210 20% 98%;
+
+  --card: 224 60% 7%;
+  --card-foreground: 210 20% 98%;
+
+  --popover: 224 60% 7%;
+  --popover-foreground: 210 20% 98%;
+
+  --muted: 215 28% 14%;
+  --muted-foreground: 218 11% 65%;
+
+  --accent: 215 28% 15%;
+  --accent-foreground: 210 20% 98%;
+
+  /* Lifted in dark mode so contrast against the dark surface stays ≥ 4.5:1. */
+  --primary: 211 100% 62%;
+  --primary-foreground: 224 71% 4%;
+
+  --secondary: 215 28% 15%;
+  --secondary-foreground: 210 20% 98%;
+
+  --success: 142 61% 48%;
+  --success-foreground: 224 71% 4%;
+  --warning: 38 92% 56%;
+  --warning-foreground: 224 71% 4%;
+  --destructive: 0 72% 60%;
+  --destructive-foreground: 224 71% 4%;
+  --info: 199 89% 58%;
+  --info-foreground: 224 71% 4%;
+
+  --border: 215 28% 17%;
+  --input: 215 28% 17%;
+  --ring: 211 100% 62%;
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-info: hsl(var(--info));
+  --color-info-foreground: hsl(var(--info-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Visible focus everywhere — WCAG 2.2 §2.4.11. Never `outline: none`. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /**
+   * Lining, tabular figures for every number.
+   *
+   * Proportional digits make a currency column ragged, which is the fastest way
+   * to make a finance product feel amateur. This is applied globally rather
+   * than per-table so no one has to remember it.
+   */
+  table,
+  .tabular {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  /* Honour the OS setting rather than animating regardless. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+}

@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Turborepo
+.turbo/
+
+# Environment — NEVER commit real secrets
+.env
+.env.local
+.env.production
+.env.*.local
+!.env.example
+!.env.test
+
+# Testing
+coverage/
+playwright-report/
+test-results/
+.nyc_output/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Runtime data
+uploads/
+storage/
+tmp/
+*.pid
+
+# Database
+*.sqlite
+*.sqlite3
+pgdata/
+
+# Backups
+backups/
+*.dump
+*.sql.age
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.recommended.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Prisma
+apps/api/prisma/migrations/dev.db*
+
+# Certificates & keys
+*.pem
+*.key
+!**/tsconfig*.json
