@@ -75,19 +75,43 @@ async function seedNumberSequences(): Promise<void> {
   const fy = financialYearOf(new Date());
   const invoicePrefix = process.env.INVOICE_NUMBER_PREFIX ?? 'HTPL/INV';
   const orderPrefix = process.env.ORDER_NUMBER_PREFIX ?? 'SO';
+  const creditNotePrefix = process.env.CREDIT_NOTE_NUMBER_PREFIX ?? 'HTPL/CRN';
+  const debitNotePrefix = process.env.DEBIT_NOTE_NUMBER_PREFIX ?? 'HTPL/DBN';
 
+  /*
+   * ── The separator, and why it differs between series (open question E2) ───
+   *
+   * The four FINANCIAL series use `/`, giving `HTPL/INV/2026-27/00001` — the
+   * format the owner's CA expects. None of them had issued a number when this
+   * was decided, which is the only moment it could safely be decided: a gapless
+   * GST series cannot be renumbered afterwards.
+   *
+   * ORDER, QUOTATION and SHIPMENT keep `-`, because numbers already exist in
+   * that shape. A discontinuity WITHIN a series (`SO/2026-27-00003` then
+   * `SO/2026-27/00004`) is exactly what an auditor asks about; a difference
+   * BETWEEN series is cosmetic. DISTRIBUTOR, CUSTOMER and TRANSFER are internal
+   * codes where `DIST-00001` reads correctly.
+   *
+   * ⚠️ If manual GST invoices already exist for this financial year, advance
+   * `next_value` past the last filed number BEFORE the first invoice is issued.
+   * The `update` clause below deliberately never resets it, so this is a
+   * one-line correction — but it has to happen before, not after.
+   */
   const sequences = [
-    { key: `INVOICE:${fy}`, prefix: `${invoicePrefix}/${fy}`, padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
-    { key: `ORDER:${fy}`, prefix: `${orderPrefix}/${fy}`, padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
-    { key: `QUOTATION:${fy}`, prefix: `QT/${fy}`, padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
-    { key: `SHIPMENT:${fy}`, prefix: `DC/${fy}`, padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
-    { key: `PAYMENT:${fy}`, prefix: `RCPT/${fy}`, padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
+    { key: `INVOICE:${fy}`, prefix: `${invoicePrefix}/${fy}`, separator: '/', padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
+    { key: `CREDIT_NOTE:${fy}`, prefix: `${creditNotePrefix}/${fy}`, separator: '/', padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
+    { key: `DEBIT_NOTE:${fy}`, prefix: `${debitNotePrefix}/${fy}`, separator: '/', padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
+    { key: `PAYMENT:${fy}`, prefix: `RCPT/${fy}`, separator: '/', padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
+    // Sales documents keep the hyphen — numbers already exist in that shape.
+    { key: `ORDER:${fy}`, prefix: `${orderPrefix}/${fy}`, separator: '-', padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
+    { key: `QUOTATION:${fy}`, prefix: `QT/${fy}`, separator: '-', padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
+    { key: `SHIPMENT:${fy}`, prefix: `DC/${fy}`, separator: '-', padding: 5, resetPolicy: 'YEARLY' as const, financialYear: fy },
     // Distributor and customer codes run continuously, not per year.
-    { key: 'DISTRIBUTOR', prefix: 'DIST', padding: 5, resetPolicy: 'NEVER' as const, financialYear: null },
-    { key: 'CUSTOMER', prefix: 'CUST', padding: 5, resetPolicy: 'NEVER' as const, financialYear: null },
+    { key: 'DISTRIBUTOR', prefix: 'DIST', separator: '-', padding: 5, resetPolicy: 'NEVER' as const, financialYear: null },
+    { key: 'CUSTOMER', prefix: 'CUST', separator: '-', padding: 5, resetPolicy: 'NEVER' as const, financialYear: null },
     // Stock transfers run continuously — they are internal movements, not
     // statutory documents, so they do not reset with the financial year.
-    { key: 'TRANSFER', prefix: 'TRF', padding: 5, resetPolicy: 'NEVER' as const, financialYear: null },
+    { key: 'TRANSFER', prefix: 'TRF', separator: '-', padding: 5, resetPolicy: 'NEVER' as const, financialYear: null },
   ];
 
   for (const sequence of sequences) {
@@ -96,7 +120,11 @@ async function seedNumberSequences(): Promise<void> {
       create: sequence,
       // Never reset `nextValue` on an existing sequence — that would reissue
       // numbers already printed on legal documents.
-      update: { prefix: sequence.prefix, padding: sequence.padding },
+      update: {
+        prefix: sequence.prefix,
+        separator: sequence.separator,
+        padding: sequence.padding,
+      },
     });
   }
 

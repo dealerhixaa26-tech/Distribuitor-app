@@ -19,6 +19,7 @@ import { CatalogModule } from './modules/catalog/catalog.module';
 import { DistributorsModule } from './modules/distributors/distributors.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { HealthModule } from './modules/health/health.module';
+import { FinanceModule } from './modules/finance/finance.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { PricingModule } from './modules/pricing/pricing.module';
 import { RolesModule } from './modules/roles/roles.module';
@@ -73,6 +74,7 @@ import { UsersModule } from './modules/users/users.module';
     PricingModule,
     InventoryModule,
     SalesModule,
+    FinanceModule,
     AuditModule,
     HealthModule,
   ],

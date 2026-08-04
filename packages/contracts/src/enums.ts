@@ -363,61 +363,211 @@ export const CANCELLABLE_ORDER_STATUSES: readonly OrderStatus[] = [
   'PROCESSING',
 ];
 
-// ── Finance ─────────────────────────────────────────────────────────────────
-
-export const INVOICE_TYPES = ['TAX_INVOICE', 'PROFORMA', 'CREDIT_NOTE', 'DEBIT_NOTE'] as const;
-export type InvoiceType = (typeof INVOICE_TYPES)[number];
+// ── Finance (Phase 8) ───────────────────────────────────────────────────────
+//
+// These replaced a set of Phase 1 placeholders that were never used and had
+// drifted from what Phase 8 actually needed: an `OVERDUE` invoice status that
+// the design deliberately does not store, a `B2C` supply type that GSTR-1 splits
+// in two, and `PENDING`/`CLEARED` payment statuses that hid the recording /
+// verification distinction ADR-0018 turns into a control.
 
 export const INVOICE_STATUSES = [
   'DRAFT',
   'ISSUED',
   'PARTIALLY_PAID',
   'PAID',
-  'OVERDUE',
   'CANCELLED',
 ] as const;
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
+export const invoiceStatusSchema = asEnum(INVOICE_STATUSES);
 
-/** Once issued, an invoice is immutable — corrections go through a credit note. */
+/**
+ * There is deliberately no `OVERDUE` status.
+ *
+ * Overdue is `dueDate < today AND amountOutstanding > 0` — computed at read
+ * time by `isOverdue()` below. A stored status only becomes correct when a
+ * nightly job runs, which means the one screen that matters ("who owes me money
+ * right now") is wrong between midnight and the job. See docs/23 §5.
+ */
+export const isOverdue = (input: {
+  dueDate: string | null;
+  amountOutstanding: string;
+  status: InvoiceStatus;
+  /** Defaults to today. Injected so the rule is testable without mocking time. */
+  asOf?: Date;
+}): boolean => {
+  if (!input.dueDate) return false;
+  if (input.status === 'DRAFT' || input.status === 'CANCELLED' || input.status === 'PAID') {
+    return false;
+  }
+  if (Number(input.amountOutstanding) <= 0) return false;
+  /*
+   * The clock rule is satisfied by the `asOf` PARAMETER, not bypassed by this
+   * default. `@hixaa/contracts` is a pure package with no DI container, so it
+   * cannot take a ClockService; instead every time-dependent helper here accepts
+   * an injectable `asOf`, and `ledger.spec.ts` passes one in every single test.
+   * The default exists only so a caller that genuinely means "now" need not
+   * say so.
+   */
+  // eslint-disable-next-line no-restricted-syntax
+  const today = (input.asOf ?? new Date()).toISOString().slice(0, 10);
+  return input.dueDate < today;
+};
+
+/**
+ * Once issued, an invoice's financial identity is frozen — corrections go
+ * through a credit or debit note (ADR-0016). Backed by a database trigger, so
+ * this list is the polite refusal rather than the guarantee.
+ */
 export const IMMUTABLE_INVOICE_STATUSES: readonly InvoiceStatus[] = [
   'ISSUED',
   'PARTIALLY_PAID',
   'PAID',
-  'OVERDUE',
   'CANCELLED',
 ];
 
-export const SUPPLY_TYPES = ['B2B', 'B2C', 'SEZ', 'EXPORT'] as const;
+/**
+ * Statuses at which an invoice still represents money owed.
+ *
+ * Declared here rather than inlined because TWO modules ask the question and
+ * they must not disagree: `OutstandingService` builds the aging report, and
+ * `OrderApprovalService.checkCredit` adds the same figure to credit exposure.
+ *
+ * Sharing the definition rather than the service is deliberate — `FinanceModule`
+ * already imports `SalesModule` for the pricing helper, so importing it back
+ * would be a module cycle. A shared constant costs nothing and cannot drift.
+ *
+ * DRAFT owes nothing (it has not been issued); CANCELLED and PAID owe nothing
+ * by definition.
+ */
+export const OUTSTANDING_INVOICE_STATUSES: readonly InvoiceStatus[] = [
+  'ISSUED',
+  'PARTIALLY_PAID',
+];
+
+export const INVOICE_TRANSITIONS: Readonly<Record<InvoiceStatus, readonly InvoiceStatus[]>> = {
+  DRAFT: ['ISSUED'],
+  // Settlement moves it forward; a credit note can move it back, which is why
+  // PAID is not terminal.
+  ISSUED: ['PARTIALLY_PAID', 'PAID', 'CANCELLED'],
+  PARTIALLY_PAID: ['PAID', 'ISSUED'],
+  PAID: ['PARTIALLY_PAID', 'ISSUED'],
+  // Terminal. The number is retained and still reported in GSTR-1 table 13.
+  CANCELLED: [],
+};
+
+export const canTransitionInvoice = (from: InvoiceStatus, to: InvoiceStatus): boolean =>
+  INVOICE_TRANSITIONS[from].includes(to);
+
+/**
+ * Which GSTR-1 table an invoice lands in. `B2C` is split into LARGE and SMALL
+ * because the portal reports them differently: B2CL invoice by invoice, B2CS
+ * as a consolidated rate-wise total per state.
+ */
+export const SUPPLY_TYPES = ['B2B', 'B2CL', 'B2CS', 'EXPORT', 'SEZ'] as const;
 export type SupplyType = (typeof SUPPLY_TYPES)[number];
+export const supplyTypeSchema = asEnum(SUPPLY_TYPES);
+
+/** CGST s.34 correction documents. One table, two series — see ADR-0017. */
+export const TAX_NOTE_TYPES = ['CREDIT', 'DEBIT'] as const;
+export type TaxNoteType = (typeof TAX_NOTE_TYPES)[number];
+export const taxNoteTypeSchema = asEnum(TAX_NOTE_TYPES);
+
+export const TAX_NOTE_STATUSES = ['DRAFT', 'ISSUED', 'CANCELLED'] as const;
+export type TaxNoteStatus = (typeof TAX_NOTE_STATUSES)[number];
+export const taxNoteStatusSchema = asEnum(TAX_NOTE_STATUSES);
+
+/** Statutory reason codes. GSTR-1 9B carries them, so this is data, not prose. */
+export const TAX_NOTE_REASONS = [
+  'SALES_RETURN',
+  'RATE_DIFFERENCE',
+  'QUANTITY_DIFFERENCE',
+  'POST_SALE_DISCOUNT',
+  'DEFICIENCY_IN_SERVICE',
+  'TAX_CORRECTION',
+  'OTHER',
+] as const;
+export type TaxNoteReason = (typeof TAX_NOTE_REASONS)[number];
+export const taxNoteReasonSchema = asEnum(TAX_NOTE_REASONS);
 
 export const PAYMENT_METHODS = [
+  'CASH',
+  'CHEQUE',
   'NEFT',
   'RTGS',
   'IMPS',
   'UPI',
-  'CHEQUE',
-  'DD',
-  'CASH',
+  'DEMAND_DRAFT',
+  'CARD',
+  /** A book adjustment — settling against a credit the party already holds. */
   'ADJUSTMENT',
 ] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 export const paymentMethodSchema = asEnum(PAYMENT_METHODS);
 
-export const PAYMENT_STATUSES = ['PENDING', 'CLEARED', 'BOUNCED', 'CANCELLED'] as const;
+/**
+ * ADR-0018: RECORDED is a memo with NO financial effect; VERIFIED is the event
+ * that credits the ledger. Named for what they mean rather than
+ * `PENDING`/`CLEARED`, which described a cheque and hid the control.
+ */
+export const PAYMENT_STATUSES = ['RECORDED', 'VERIFIED', 'BOUNCED', 'CANCELLED'] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+export const paymentStatusSchema = asEnum(PAYMENT_STATUSES);
 
-export const PAYMENT_DIRECTIONS = ['INBOUND', 'OUTBOUND'] as const;
-export type PaymentDirection = (typeof PAYMENT_DIRECTIONS)[number];
+/** Only a verified payment may be allocated against an invoice (ADR-0018 §3). */
+export const ALLOCATABLE_PAYMENT_STATUSES: readonly PaymentStatus[] = ['VERIFIED'];
 
-export const LEDGER_REF_TYPES = [
-  'OPENING',
+export const LEDGER_PARTY_TYPES = ['DISTRIBUTOR', 'CUSTOMER'] as const;
+export type LedgerPartyType = (typeof LEDGER_PARTY_TYPES)[number];
+export const ledgerPartyTypeSchema = asEnum(LEDGER_PARTY_TYPES);
+
+export const LEDGER_ENTRY_TYPES = [
+  'OPENING_BALANCE',
   'INVOICE',
-  'PAYMENT',
   'CREDIT_NOTE',
   'DEBIT_NOTE',
+  'PAYMENT',
+  'TDS',
+  'WRITE_OFF',
   'ADJUSTMENT',
 ] as const;
-export type LedgerRefType = (typeof LEDGER_REF_TYPES)[number];
+export type LedgerEntryType = (typeof LEDGER_ENTRY_TYPES)[number];
+export const ledgerEntryTypeSchema = asEnum(LEDGER_ENTRY_TYPES);
+
+/**
+ * Which side each entry type posts to. DEBIT increases what the party owes
+ * Hixaa (ADR-0015 §3).
+ *
+ * Declared as data rather than left to a conditional at each call site: a sign
+ * convention that lives in people's heads inverts itself within a year, usually
+ * inside one report while the others still use the old one. `ledger.spec.ts`
+ * asserts this table.
+ */
+export const LEDGER_ENTRY_SIDES: Readonly<
+  Record<LedgerEntryType, 'DEBIT' | 'CREDIT' | 'EITHER'>
+> = {
+  OPENING_BALANCE: 'EITHER',
+  INVOICE: 'DEBIT',
+  CREDIT_NOTE: 'CREDIT',
+  DEBIT_NOTE: 'DEBIT',
+  PAYMENT: 'CREDIT',
+  TDS: 'CREDIT',
+  WRITE_OFF: 'CREDIT',
+  ADJUSTMENT: 'EITHER',
+};
+
+/** Aging buckets, in days past the due date. */
+export const AGING_BUCKETS = ['CURRENT', 'D0_30', 'D31_60', 'D61_90', 'D90_PLUS'] as const;
+export type AgingBucket = (typeof AGING_BUCKETS)[number];
+
+/** Which bucket an invoice falls in, given how many days past due it is. */
+export const agingBucketFor = (daysPastDue: number): AgingBucket => {
+  if (daysPastDue <= 0) return 'CURRENT';
+  if (daysPastDue <= 30) return 'D0_30';
+  if (daysPastDue <= 60) return 'D31_60';
+  if (daysPastDue <= 90) return 'D61_90';
+  return 'D90_PLUS';
+};
 
 export const NUMBER_RESET_POLICIES = ['NEVER', 'YEARLY', 'MONTHLY'] as const;
 export type NumberResetPolicy = (typeof NUMBER_RESET_POLICIES)[number];

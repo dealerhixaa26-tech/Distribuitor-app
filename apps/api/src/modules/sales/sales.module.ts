@@ -45,8 +45,11 @@ import { ShipmentsService } from './shipments.service';
     OrdersService,
     ShipmentsService,
   ],
-  // Exported for Phase 8: invoicing reads an order's snapshotted lines, and
-  // credit exposure gains its outstanding-invoice term there.
-  exports: [OrdersService, OrderApprovalService, QuotationsService],
+  // Exported for Phase 8: invoicing reads an order's snapshotted lines, and a
+  // DIRECT invoice (one with no originating order) prices through
+  // `SalesPricingHelper` — the same helper a quotation and an order use, so
+  // there is exactly one mapping from the pricing engine onto stored line
+  // columns rather than a third one living in the finance module.
+  exports: [OrdersService, OrderApprovalService, QuotationsService, SalesPricingHelper],
 })
 export class SalesModule {}

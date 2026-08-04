@@ -47,9 +47,16 @@ export class NumberSequenceService {
     // FOR UPDATE: the lock is held until the caller's transaction commits, so
     // two concurrent allocations cannot read the same next_value.
     const rows = await tx.$queryRaw<
-      Array<{ id: string; key: string; prefix: string; next_value: number; padding: number }>
+      Array<{
+        id: string;
+        key: string;
+        prefix: string;
+        separator: string;
+        next_value: number;
+        padding: number;
+      }>
     >`
-      SELECT id, key, prefix, next_value, padding
+      SELECT id, key, prefix, separator, next_value, padding
       FROM number_sequence
       WHERE key = ANY(${candidates}::text[])
       ORDER BY array_position(${candidates}::text[], key)
@@ -71,7 +78,17 @@ export class NumberSequenceService {
     });
 
     const padded = String(sequence.next_value).padStart(sequence.padding, '0');
-    return `${sequence.prefix}-${padded}`;
+    /*
+     * The separator is per-sequence, not a hardcoded hyphen.
+     *
+     * It WAS hardcoded, which meant the invoice series produced
+     * `HTPL/INV/2026-27-00001` while both `docs/HANDOFF.md` §7 and
+     * `docs/12-recommendations.md` §E documented `HTPL/INV/2026-27/00001`. It
+     * went unnoticed because every series exercised before Phase 8 —
+     * `DIST-`, `CUST-`, `SO/`, `QT/`, `DC/`, `TRF-` — looks unremarkable with a
+     * hyphen. Caught while answering E2, before the first invoice existed.
+     */
+    return `${sequence.prefix}${sequence.separator}${padded}`;
   }
 
   /** `INVOICE` → `INVOICE:2026-27` for series that reset each financial year. */

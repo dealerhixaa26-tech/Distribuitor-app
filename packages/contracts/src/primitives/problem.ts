@@ -56,6 +56,14 @@ export const ERROR_CODES = {
   PRODUCT_NOT_AUTHORIZED: 'PRODUCT_NOT_AUTHORIZED',
   PRICE_NOT_FOUND: 'PRICE_NOT_FOUND',
   INVOICE_IMMUTABLE: 'INVOICE_IMMUTABLE',
+  /**
+   * An issue was refused by one of the six gates in docs/23 §5.1. The specific
+   * gate is in `extensions.refusal`, because the remedy differs by gate — an
+   * unverified GSTIN is fixed in Settings by an admin, a missing tax rate in
+   * the tax table by finance. One code with different prose would leave the UI
+   * guessing which screen to send the user to.
+   */
+  INVOICE_ISSUE_REFUSED: 'INVOICE_ISSUE_REFUSED',
   OVER_ALLOCATION: 'OVER_ALLOCATION',
   NUMBER_SEQUENCE_EXHAUSTED: 'NUMBER_SEQUENCE_EXHAUSTED',
 
@@ -99,6 +107,18 @@ export const problemDetailsSchema = z.object({
   code: z.string(),
   /** Per-field detail for validation failures. */
   errors: z.array(fieldErrorSchema).optional(),
+  /**
+   * Extra machine-readable detail, opted into per error type.
+   *
+   * RFC 7807 permits extension members, and some refusals need one: an invoice
+   * issue refusal carries WHICH of its gates fired, because the remedy differs
+   * by gate and the frontend has to route the user to a different screen.
+   *
+   * Deliberately opt-in rather than "serialise the error's context": a
+   * DomainError's `context` is a logging surface and routinely holds ids and
+   * internals that should never cross the wire.
+   */
+  extensions: z.record(z.string(), z.unknown()).optional(),
   timestamp: z.string().optional(),
 });
 

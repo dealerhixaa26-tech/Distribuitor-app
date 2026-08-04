@@ -66,6 +66,31 @@ const DEV_USERS: DevUserSeed[] = [
       'Territory-scoped AND holds inventory WRITE permissions — the only account that can ' +
       'prove scope guards writes rather than permissions masking the test.',
   },
+  {
+    email: 'west.accountant@hixaa.test',
+    password: 'accounts-vidarbha-2026',
+    firstName: 'West',
+    lastName: 'Accountant',
+    roleKey: 'ACCOUNTS_EXECUTIVE',
+    territoryName: 'West Zone',
+    purpose:
+      'Phase 8’s account of the same shape: territory-scoped AND holding finance WRITE ' +
+      'permissions, so an out-of-zone invoice or payment write refuses on SCOPE grounds. ' +
+      'Also the counterparty for the segregation test — it records receipts that a ' +
+      'different account must verify (ADR-0018).',
+  },
+  {
+    email: 'finance.manager@hixaa.test',
+    password: 'finance-nagpur-2026',
+    firstName: 'Finance',
+    lastName: 'Manager',
+    roleKey: 'FINANCE_MANAGER',
+    territoryName: null,
+    purpose:
+      'Holds PAYMENT_VERIFY and INVOICE_ISSUE, which ACCOUNTS_EXECUTIVE deliberately does not. ' +
+      'The segregation in ADR-0018 needs TWO accounts to demonstrate at all: one to record a ' +
+      'receipt and a different one to confirm it.',
+  },
 ];
 
 export async function seedDevUsers(prisma: PrismaClient): Promise<void> {

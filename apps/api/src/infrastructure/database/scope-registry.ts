@@ -134,6 +134,35 @@ export const viaDistributorOrCustomer = (): ScopeStrategy => ({
 });
 
 /**
+ * Reaches a territory through the INVOICE a document corrects.
+ *
+ * A credit or debit note has no distributor and no customer of its own — it is
+ * defined entirely by the invoice it references. Nesting through that invoice
+ * means the note is visible exactly when the invoice is, which is the only
+ * answer that cannot surprise anyone.
+ */
+export const viaInvoice = (relation = 'originalInvoice'): ScopeStrategy => ({
+  build(access) {
+    if (access.scopeType === 'GLOBAL') return null;
+
+    if (access.scopeType === 'DISTRIBUTOR') {
+      if (access.distributorIds.length === 0) return DENY_ALL;
+      return { [relation]: { distributorId: { in: access.distributorIds } } };
+    }
+
+    if (access.territoryIds.length === 0) return DENY_ALL;
+    return {
+      [relation]: {
+        OR: [
+          { distributor: { territoryId: { in: access.territoryIds } } },
+          { customer: { territoryId: { in: access.territoryIds } } },
+        ],
+      },
+    };
+  },
+});
+
+/**
  * The scope registry. Keys are Prisma model names as they appear in
  * `Prisma.ModelName` (camelCase).
  */
@@ -187,9 +216,23 @@ export const SCOPE_REGISTRY: Readonly<Record<string, ScopeStrategy>> = {
   // ships from, which is already territory-scoped.
   shipment:  viaWarehouse(),
   customer:  byTerritory(),
-  // ── Phase 8 ──
-  // invoice:     viaDistributor(),
-  // payment:     viaDistributor(),
+
+  // ── Phase 8 — live ──
+  // An invoice and a payment reach a territory the same way an order does:
+  // through the distributor, or through the customer when there is no
+  // distributor. `viaDistributorOrCustomer` is reused unchanged — a second
+  // strategy with the same intent is a second thing to get wrong.
+  invoice: viaDistributorOrCustomer(),
+  payment: viaDistributorOrCustomer(),
+  // A tax note has neither relation of its own; it reaches a territory through
+  // the invoice it corrects, which is already scoped above.
+  taxNote: viaInvoice(),
+  // The ledger carries the same two nullable FKs as an invoice — which is why
+  // its columns were reshaped in migration 0012. Before that it held
+  // `partyType` + `partyId`, and a column with no relation cannot be scoped at
+  // all: the strategy written for it referenced fields `EffectiveAccess` does
+  // not have, and would have failed closed on every read.
+  ledgerEntry: viaDistributorOrCustomer(),
 };
 
 // Prisma hands extensions a PascalCase model name; the registry is keyed
