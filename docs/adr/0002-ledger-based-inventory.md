@@ -1,6 +1,6 @@
 # ADR-0002 — Ledger-based inventory instead of mutable stock counters
 
-- **Status:** Proposed (awaiting approval)
+- **Status:** Accepted — implemented in Phase 6, see `docs/19-phase-6-design.md`
 - **Date:** 2026-08-03
 
 ## Context

@@ -42,14 +42,18 @@ export const scopeExtension = Prisma.defineExtension({
 
       // Writes are scoped too: without this, an out-of-scope caller who knows
       // an id could mutate a record they are not permitted to read.
+      //
+      // `update` and `delete` take a WhereUniqueInput, which MUST carry a
+      // top-level unique field — so they compose differently from the bulk
+      // operations. See `applyScope`.
       async update({ model, args, query }) {
-        return query(applyScope(model, args) as never);
+        return query(applyScope(model, args, 'unique') as never);
       },
       async updateMany({ model, args, query }) {
         return query(applyScope(model, args) as never);
       },
       async delete({ model, args, query }) {
-        return query(applyScope(model, args) as never);
+        return query(applyScope(model, args, 'unique') as never);
       },
       async deleteMany({ model, args, query }) {
         return query(applyScope(model, args) as never);
@@ -60,7 +64,39 @@ export const scopeExtension = Prisma.defineExtension({
 
 type ScopableArgs = { where?: Record<string, unknown> } & Record<string, unknown>;
 
-function applyScope<T extends ScopableArgs | undefined>(model: string, args: T): T {
+/**
+ * How the predicate is composed into `where`.
+ *
+ *   `filter` — the default. `{ AND: [caller, predicate] }`, valid for any
+ *     WhereInput: finds, counts, updateMany, deleteMany.
+ *
+ *   `unique` — for `update` and `delete`, whose `where` is a WhereUniqueInput
+ *     and must expose at least one UNIQUE field at the TOP level. Burying the
+ *     caller's `{ id }` inside an `AND` array satisfies no unique constraint,
+ *     and Prisma rejects the call outright:
+ *
+ *       Argument `where` of type StockBalanceWhereUniqueInput needs at least
+ *       one of `id` arguments.
+ *
+ *     So the unique field is kept where it is and the predicate is appended to
+ *     `where.AND` instead. Prisma permits non-unique filters alongside a unique
+ *     one, and evaluates both — which is exactly the semantics wanted: find by
+ *     id, then refuse unless it is also in scope.
+ *
+ * This distinction was found by an actual out-of-scope write attempt, not by
+ * reading the code. Every GLOBAL caller short-circuits before reaching here
+ * (`predicate` is null), so the fault was invisible to every test that used an
+ * admin token — see docs/20 §5.
+ */
+type Composition = 'filter' | 'unique';
+
+/** Exported for direct testing — `Prisma.defineExtension` wraps its argument,
+ *  so the hooks themselves are not reachable from a spec. */
+export function applyScope<T extends ScopableArgs | undefined>(
+  model: string,
+  args: T,
+  composition: Composition = 'filter',
+): T {
   if (!isScopedModel(model)) return args;
 
   const context = RequestContextStore.get();
@@ -84,6 +120,22 @@ function applyScope<T extends ScopableArgs | undefined>(model: string, args: T):
   if (!predicate) return args;
 
   const existing = (args ?? {}).where;
+
+  if (composition === 'unique') {
+    // Keep the unique field(s) where Prisma expects them and append the scope
+    // predicate to `AND`, preserving any AND the caller already supplied.
+    const callerAnd = existing?.AND;
+    const merged = Array.isArray(callerAnd)
+      ? [...callerAnd, predicate]
+      : callerAnd
+        ? [callerAnd, predicate]
+        : [predicate];
+
+    return {
+      ...(args ?? {}),
+      where: { ...(existing ?? {}), AND: merged },
+    } as unknown as T;
+  }
 
   // AND-composed rather than merged, so a caller-supplied filter on the same
   // column narrows the scope instead of overwriting it.

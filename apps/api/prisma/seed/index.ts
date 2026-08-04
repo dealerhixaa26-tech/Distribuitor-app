@@ -4,6 +4,8 @@ import { PrismaClient } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { config as loadEnv } from 'dotenv';
 import { seedCatalog } from './catalog.seed';
+import { seedDevUsers } from './dev-users.seed';
+import { seedInventory } from './inventory.seed';
 import { seedGeography, seedIndustries, seedTerritories } from './geography.seed';
 import { seedPermissions, seedRoles } from './permissions.seed';
 import { seedPortfolio } from './portfolio.seed';
@@ -46,8 +48,14 @@ async function main(): Promise<void> {
   console.log('\n› Catalog (categories, products, prices, tax rates)');
   await seedCatalog(prisma);
 
+  console.log('\n› Inventory (warehouse, reorder policy)');
+  await seedInventory(prisma);
+
   console.log('\n› Number sequences');
   await seedNumberSequences();
+
+  console.log('\n› Denial-test accounts (dev only)');
+  await seedDevUsers(prisma);
 
   console.log('\n› Bootstrap administrator');
   await seedSuperAdmin();
@@ -77,6 +85,9 @@ async function seedNumberSequences(): Promise<void> {
     // Distributor and customer codes run continuously, not per year.
     { key: 'DISTRIBUTOR', prefix: 'DIST', padding: 5, resetPolicy: 'NEVER' as const, financialYear: null },
     { key: 'CUSTOMER', prefix: 'CUST', padding: 5, resetPolicy: 'NEVER' as const, financialYear: null },
+    // Stock transfers run continuously — they are internal movements, not
+    // statutory documents, so they do not reset with the financial year.
+    { key: 'TRANSFER', prefix: 'TRF', padding: 5, resetPolicy: 'NEVER' as const, financialYear: null },
   ];
 
   for (const sequence of sequences) {

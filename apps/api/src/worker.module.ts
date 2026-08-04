@@ -8,6 +8,8 @@ import { MailModule } from './infrastructure/mail/mail.module';
 import { OutboxDispatcherModule, OutboxModule } from './infrastructure/outbox/outbox.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { StorageModule } from './infrastructure/storage/storage.module';
+import { InventoryModule } from './modules/inventory/inventory.module';
+import { InventoryProcessor } from './jobs/inventory.processor';
 import { EmailProcessor } from './jobs/email.processor';
 import { MaintenanceProcessor } from './jobs/maintenance.processor';
 
@@ -29,8 +31,10 @@ import { MaintenanceProcessor } from './jobs/maintenance.processor';
     MailModule,
     OutboxModule,
     OutboxDispatcherModule,
+    // Brings the reconciliation, reservation-expiry, and low-stock jobs.
+    InventoryModule,
     ScheduleModule.forRoot(),
   ],
-  providers: [EmailProcessor, MaintenanceProcessor],
+  providers: [EmailProcessor, MaintenanceProcessor, InventoryProcessor],
 })
 export class WorkerModule {}

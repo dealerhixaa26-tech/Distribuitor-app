@@ -71,19 +71,13 @@ export type TerritorySummary = z.infer<typeof territorySchema>;
 export type TerritoryNode = TerritorySummary & { children: TerritoryNode[] };
 
 // ── Warehouse ───────────────────────────────────────────────────────────────
-
-export const createWarehouseSchema = z.object({
-  code: businessCodeSchema,
-  name: shortTextSchema,
-  type: z.enum(['COMPANY', 'DISTRIBUTOR', 'TRANSIT', 'SCRAP']).default('COMPANY'),
-  territoryId: idSchema.nullable().optional(),
-  distributorId: idSchema.nullable().optional(),
-  address: addressSchema.optional(),
-  isDefault: z.boolean().default(false),
-});
-export type CreateWarehouseDto = z.infer<typeof createWarehouseSchema>;
-
-export const updateWarehouseSchema = createWarehouseSchema.partial().omit({ code: true });
+//
+// MOVED to `inventory/warehouse.schema.ts` in Phase 6, which owns warehouses
+// (roadmap 6.1). The stub that lived here was introduced in Phase 3 alongside
+// the Warehouse model because a warehouse is a location; it had no
+// type/distributor cross-validation, which Phase 6 requires — a DISTRIBUTOR
+// warehouse must name its owner and no other type may. Kept as one definition
+// rather than two so the two cannot disagree.
 
 // ── Lookups ─────────────────────────────────────────────────────────────────
 

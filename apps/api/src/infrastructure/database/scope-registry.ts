@@ -73,6 +73,22 @@ export const byDistributor = (column = 'distributorId'): ScopeStrategy => ({
 });
 
 /**
+ * The model reaches a territory through the WAREHOUSE that holds it.
+ *
+ * Stock is not owned by a territory; a warehouse is, and stock lives in a
+ * warehouse. Nesting the predicate keeps one definition of "which warehouses
+ * can this caller see" rather than copying the rule per inventory table.
+ */
+export const viaWarehouse = (relation = 'warehouse'): ScopeStrategy => ({
+  build(access) {
+    if (access.scopeType === 'GLOBAL') return null;
+    if (access.scopeType !== 'TERRITORY') return DENY_ALL;
+    if (access.territoryIds.length === 0) return DENY_ALL;
+    return { [relation]: { territoryId: { in: access.territoryIds } } };
+  },
+});
+
+/**
  * The model reaches a territory through its parent distributor — e.g. an Order
  * has no territoryId but its Distributor does.
  */
@@ -114,6 +130,25 @@ export const SCOPE_REGISTRY: Readonly<Record<string, ScopeStrategy>> = {
   // to every non-global user; NOT scoping this one would leak one partner's
   // commercial terms to a manager in another territory.
   distributorProduct: viaDistributor(),
+
+  // ── Phase 6 — live ──
+  // Stock has no territory of its own; it reaches one through the warehouse
+  // that holds it. `warehouse` is itself scoped by territory (Phase 3), so
+  // nesting the predicate here bounds every stock read to the caller's subtree.
+  //
+  // The LEDGER is scoped too, not just the balance: it records who shipped what
+  // to whom, and reading another territory's movement history would leak the
+  // same commercial information the balance does.
+  stockBalance: viaWarehouse(),
+  stockLedgerEntry: viaWarehouse(),
+  stockReservation: viaWarehouse(),
+  inventorySetting: viaWarehouse(),
+  stockCount: viaWarehouse(),
+  // A serial's warehouse is NULL once dispatched, so a warehouse predicate
+  // would hide exactly the rows the trace lookup exists to find. Scoped by the
+  // receiving distributor instead — which is the question being asked anyway:
+  // "which of MY partners has this unit?"
+  serialNumber: byDistributor('currentDistributorId'),
 
   // ── Phase 7 ──
   // order:       viaDistributor(),
