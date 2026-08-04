@@ -1,7 +1,7 @@
 # HANDOFF — Hixaa DMS
 
 > Everything a new session needs to continue this build without re-deriving it.
-> Last updated at the end of Phase 5. Read this before touching code.
+> Last updated at the end of Phase 4. Read this before touching code.
 
 ---
 
@@ -30,7 +30,7 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
 | **Branch** | `main` — clean, pushed, at `7cf5393` |
-| **Size** | ~20,500 source lines · 36 tables · 6 migrations · 69 endpoints · 107 tests |
+| **Size** | ~26,600 source lines · 50 tables · 6 migrations · 112 endpoints · 232 tests |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
 
 ### Phase status
@@ -40,12 +40,12 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | 1 — Foundation | ✅ Complete — `docs/13-phase-1-completion.md` |
 | 2 — Identity & Access | ✅ Complete — `docs/14-phase-2-completion.md` |
 | 3 — Master Data | ✅ Complete — `docs/15-phase-3-progress.md` |
-| **4 — Catalog & Pricing** | ❌ **NOT STARTED — this is the critical path** |
+| 4 — Catalog & Pricing | ✅ Complete — `docs/18-phase-4-completion.md` |
 | 5 — Distributors | ✅ Complete — `docs/16-phase-5-completion.md` |
 | 6–11 | Not started — see `docs/05-roadmap.md` |
 
-**Phase 4 was skipped** at the user's request to build Phase 5 first. Nothing downstream
-(orders, invoicing, inventory reservations) can start without it.
+**Phase 6 (Inventory) is now the critical path.** Phase 4 closed both seams Phase 5 left open:
+`Distributor.priceListId` is a real FK, and `DistributorProduct` is the authorized catalog.
 
 ---
 
@@ -128,6 +128,23 @@ raw-SQL `now()` comparisons are off by the session's UTC offset.
 ### 4.9 Shell `cd` does not persist reliably between tool calls
 Use absolute paths. This has silently run commands in the wrong directory more than once.
 
+### 4.10 `apiFetch` already unwraps the `{ data }` envelope for a SINGLE resource
+It returns the envelope whole only when `meta` is present (i.e. for lists). So a detail page writes
+`api.get<Thing>(path)` — **not** `.then(r => r.data)`. Double-unwrapping yields `undefined` and
+renders an empty/not-found state against a **200 OK**. Types cannot catch it, because the generic
+is whatever you claim it is. Cost a Phase 4 debugging round.
+
+### 4.11 pg_trgm's `%` operator compares WHOLE strings
+`similarity('Raksha IoT Gateway', 'raksah')` is **0.18** — below the 0.3 default threshold — because
+a long name dilutes the match, so `name % 'raksah'` finds nothing and a typo-tolerant search is
+silently dead code. Use **`word_similarity(query, target)`**, which scores against the closest word
+and gives 0.57 for the same pair. See `products.service.ts` `searchIds()`.
+
+### 4.12 A price is decided in exactly ONE place
+`PricingService.quote()` (ADR-0007). Never read `PriceListItem.price` directly from a service —
+that is how a quote and the invoice it becomes come to disagree by a few hundred rupees with no way
+to say which is right. Phases 7 and 8 must call the engine.
+
 ---
 
 ## 5. Architecture in one screen
@@ -151,37 +168,38 @@ Six ADRs in `docs/adr/`. The ones that constrain daily work:
   a request path.**
 - **0006** Prisma stays on 6.19.3. Prisma 7 requires mandatory driver adapters and relocates
   `dmmf`, `Decimal`, and the error classes — all load-bearing here. Revisit at Phase 11.
+- **0007** ONE pricing pipeline. `PricingService.quote()` is the only place a price is decided;
+  discounts never stack; a manual override is an audited input, not a bypass.
+- **0008** Price lists are GST-EXCLUSIVE. Tax is derived forward, never backed out. `TaxRate` is
+  date-effective and authoritative; `Product.gstRate` is a display snapshot only.
 
 ### Scoped entities so far
 `SCOPE_REGISTRY` in `infrastructure/database/scope-registry.ts`:
-`territory` (self, subtree-expanded), `warehouse`, `distributor` (by territory).
-Commented-out entries mark where Phases 7–8 plug in.
+`territory` (self, subtree-expanded), `warehouse`, `distributor` (by territory),
+`distributorProduct` (via distributor). Commented-out entries mark where Phases 7–8 plug in.
+
+The rest of the catalog — products, categories, price lists, discount rules, tax rates — is
+company-wide reference data and deliberately NOT scoped.
 
 ---
 
-## 6. What Phase 4 must deliver
+## 6. What Phase 6 must deliver
 
-From `docs/05-roadmap.md` §Phase 4, plus the two seams Phase 5 left open:
+From `docs/05-roadmap.md` §Phase 6, and see ADR-0002 — inventory is a **ledger plus a derived
+balance, never a mutable counter**.
 
-1. **Categories & brands** — nested categories with materialised path (reuse the territory
-   pattern in `modules/territories/territory-path.ts`).
-2. **Products** — four types, variants, revisions, `ProductSpecification` as real rows (industrial
-   buyers filter on specs), media, HSN/SAC, warranty, `isSerialized`/`isBatchTracked`, FTS.
-3. **BOM / kits** — so "Raksha IoT — 50-worker deployment" explodes into gateways, tags,
-   licences, and commissioning.
-4. **Price lists** — versioned, date-effective, volume slabs, distributor assignment.
-   → **Closes seam 1**: `Distributor.priceListId` is already a nullable column; add the FK.
-5. **Discount rules** with priority resolution, and a single `POST /pricing/quote` endpoint so
-   the pricing rule exists in exactly one place.
-6. **`DistributorProduct`** authorized catalog. → **Closes seam 2**.
-7. **Tax** — date-effective `TaxRate` table and a `GstCalculator` with an exhaustive test suite
-   including a property-based test that line taxes always sum to the invoice tax.
+1. **Stock ledger** — append-only, signed quantities, one row per movement.
+2. **Stock balance** — a derived read-model maintained in the same transaction, with
+   `CHECK (quantity_on_hand >= 0)` as the last line of defence.
+3. **Reservations** — stock committed to an approved order but not yet issued.
+4. **Serial and batch tracking** — `Product.isSerialized` already drives this; a Raksha gateway in
+   a confined space is a warranty and liability object.
+5. **Transfers, adjustments, cycle counts.**
 
-Reusable, already built: `NumberSequenceService` (gapless, transaction-scoped),
-`DocumentsService` (for brochures/datasheets), `keysetWhere`/`toListResult`/`parseSort`,
-`DataTable`, `Money`, `hsnSchema`/`sacSchema`/`gstRateSchema`.
+Reusable, already built: `ProductRelationsService.explode()` (reserve against an exploded kit),
+`NumberSequenceService`, `keysetWhere`/`toListResult`/`parseSort`, `Money`, `DataTable`.
 
----
+Register `stockLedgerEntry` / `stockBalance` in `SCOPE_REGISTRY` via warehouse, and prove refusal.
 
 ## 7. Open questions for the user
 
@@ -191,10 +209,10 @@ Still unanswered from `docs/12-recommendations.md` §E:
 |---|---|---|
 | E1 | Hixaa's **real GSTIN, PAN, CIN** | **Phase 8 invoicing** — `company.statutory.verified` is `false` and invoicing must refuse to issue while it is |
 | E2 | Invoice number format the CA expects | Phase 8 |
-| E3 | Warehouse list (how many, where) | Phase 6 |
+| E3 | Warehouse list (how many, where) | **Phase 6 — now the critical path, ask before building** |
 | E4 | Real territory structure | Seeded 5 zones as a guess; editable |
 | E5 | Hostinger VPS plan; is Docker installed | Phase 11 |
-| E8 | Existing product/price data to import (Excel/Tally?) | **Phase 4 — worth asking before building the catalog** |
+| ~~E8~~ | ~~Existing product/price data~~ | **ANSWERED**: none to import; catalog seeded from the portfolio, pricing made situational |
 | E9 | Payment terms actually used | Phase 5 defaults seeded |
 | E10 | Logo SVG + brand hex values | Cosmetic; placeholder `#0057B8` in use |
 

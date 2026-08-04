@@ -96,9 +96,20 @@ export const PRODUCT_MEDIA_TYPES = [
   'CAD',
 ] as const;
 export type ProductMediaType = (typeof PRODUCT_MEDIA_TYPES)[number];
+export const productMediaTypeSchema = asEnum(PRODUCT_MEDIA_TYPES);
 
 export const PRICE_LIST_STATUSES = ['DRAFT', 'ACTIVE', 'ARCHIVED'] as const;
 export type PriceListStatus = (typeof PRICE_LIST_STATUSES)[number];
+export const priceListStatusSchema = asEnum(PRICE_LIST_STATUSES);
+
+/**
+ * Whether a price list's prices include tax. Hixaa quotes ex-GST — see
+ * ADR-0008. Stored explicitly rather than assumed, because a column of numbers
+ * carries no memory of which convention produced it.
+ */
+export const PRICE_BASES = ['EXCLUSIVE', 'INCLUSIVE'] as const;
+export type PriceBasis = (typeof PRICE_BASES)[number];
+export const priceBasisSchema = asEnum(PRICE_BASES);
 
 export const DISCOUNT_SCOPES = [
   'GLOBAL',
@@ -108,9 +119,24 @@ export const DISCOUNT_SCOPES = [
   'PRODUCT',
 ] as const;
 export type DiscountScope = (typeof DISCOUNT_SCOPES)[number];
+export const discountScopeSchema = asEnum(DISCOUNT_SCOPES);
+
+/**
+ * Tie-break when two rules share a `priority`: the more specific scope wins.
+ * Declared as data so the pricing engine's ordering is inspectable and testable
+ * rather than buried in a comparator. See ADR-0007 §3.
+ */
+export const DISCOUNT_SCOPE_SPECIFICITY: Readonly<Record<DiscountScope, number>> = {
+  PRODUCT: 0,
+  CATEGORY: 1,
+  DISTRIBUTOR: 2,
+  PRICE_LIST: 3,
+  GLOBAL: 4,
+};
 
 export const DISCOUNT_TYPES = ['PERCENT', 'FLAT'] as const;
 export type DiscountType = (typeof DISCOUNT_TYPES)[number];
+export const discountTypeSchema = asEnum(DISCOUNT_TYPES);
 
 // ── Inventory ───────────────────────────────────────────────────────────────
 

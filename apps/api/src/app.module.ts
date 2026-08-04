@@ -15,9 +15,11 @@ import { QueueModule } from './infrastructure/queue/queue.module';
 import { StorageModule } from './infrastructure/storage/storage.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { CatalogModule } from './modules/catalog/catalog.module';
 import { DistributorsModule } from './modules/distributors/distributors.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { HealthModule } from './modules/health/health.module';
+import { PricingModule } from './modules/pricing/pricing.module';
 import { RolesModule } from './modules/roles/roles.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { TerritoriesModule } from './modules/territories/territories.module';
@@ -65,6 +67,8 @@ import { UsersModule } from './modules/users/users.module';
     SettingsModule,
     DocumentsModule,
     DistributorsModule,
+    CatalogModule,
+    PricingModule,
     AuditModule,
     HealthModule,
   ],

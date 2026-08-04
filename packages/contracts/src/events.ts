@@ -28,6 +28,18 @@ export const DOMAIN_EVENTS = {
   DISTRIBUTOR_DOCUMENT_EXPIRING: 'distributor.document_expiring',
   DISTRIBUTOR_CREDIT_LIMIT_CHANGED: 'distributor.credit_limit_changed',
 
+  // Catalog & pricing
+  PRODUCT_CREATED: 'product.created',
+  PRODUCT_STATUS_CHANGED: 'product.status_changed',
+  /// Raised when a product's price-affecting fields change, so anything holding
+  /// a stale quotation can be re-priced rather than silently going out of date.
+  PRODUCT_PRICE_AFFECTING_CHANGE: 'product.price_affecting_change',
+  PRICE_LIST_PUBLISHED: 'pricelist.published',
+  PRICE_LIST_CLONED: 'pricelist.cloned',
+  DISCOUNT_RULE_CHANGED: 'discount.rule_changed',
+  TAX_RATE_SUPERSEDED: 'tax.rate_superseded',
+  DISTRIBUTOR_CATALOG_CHANGED: 'distributor.catalog_changed',
+
   // Sales
   QUOTATION_SENT: 'quotation.sent',
   QUOTATION_ACCEPTED: 'quotation.accepted',
@@ -80,6 +92,10 @@ export const EVENT_QUEUE_ROUTING: Readonly<Record<string, QueueName>> = {
   [DOMAIN_EVENTS.SECURITY_ACCOUNT_LOCKED]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.SECURITY_SENSITIVE_FIELD_CHANGED]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.DISTRIBUTOR_APPROVED]: QUEUE_NAMES.EMAIL,
+  // Publishing a price list changes what every assigned partner pays, so it
+  // notifies rather than merely being logged.
+  [DOMAIN_EVENTS.PRICE_LIST_PUBLISHED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.DISTRIBUTOR_CATALOG_CHANGED]: QUEUE_NAMES.NOTIFICATIONS,
   [DOMAIN_EVENTS.QUOTATION_SENT]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.ORDER_APPROVED]: QUEUE_NAMES.NOTIFICATIONS,
   [DOMAIN_EVENTS.ORDER_SUBMITTED]: QUEUE_NAMES.NOTIFICATIONS,
