@@ -355,7 +355,7 @@ export class UsersService {
     await this.prisma.transaction(async (tx) => {
       // Soft delete — the extension rewrites this to set deletedAt. History
       // referencing this user stays intact.
-      await tx.user.delete({ where: { id } });
+      await tx.user.softDelete({ id });
       await tx.session.updateMany({
         where: { userId: id, revokedAt: null },
         data: { revokedAt: this.clock.now(), revokedReason: 'USER_DELETED' },

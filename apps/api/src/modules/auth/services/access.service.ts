@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { EffectiveAccess, Permission, ScopeType } from '@hixaa/contracts';
 import { PinoLogger } from 'nestjs-pino';
 import { CacheKeys, RedisService } from '../../../infrastructure/cache/redis.service';
+import { RequestContextStore } from '../../../common/context/request-context';
 import { ClockService } from '../../../common/utils/clock.service';
 import { AppConfigService } from '../../../config/app-config.service';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
@@ -121,9 +122,42 @@ export class AccessService {
       userId,
       permissions: [...permissions].sort() as Permission[],
       scopeType,
-      territoryIds: [...territoryIds],
+      // Expanded to the full subtree: assigning someone the West zone must mean
+      // the zone AND every territory under it, or territory scoping would only
+      // ever grant a single node.
+      territoryIds: await this.expandTerritorySubtrees([...territoryIds]),
       distributorIds: [...distributorIds],
     };
+  }
+
+  /**
+   * Expands territory ids to include every descendant, using the materialised
+   * path — one indexed prefix query instead of a recursive walk.
+   *
+   * Deliberately implemented here rather than by calling TerritoriesService:
+   * that service depends on AccessService for cache invalidation, and importing
+   * it back would be a circular dependency. The query is four lines; the cycle
+   * would be permanent.
+   */
+  private async expandTerritorySubtrees(territoryIds: string[]): Promise<string[]> {
+    if (territoryIds.length === 0) return [];
+
+    // withoutScope: resolving a caller's own scope must not itself be filtered
+    // by that scope, which would be circular and would always return nothing.
+    return RequestContextStore.withoutScope(async () => {
+      const roots = await this.prisma.db.territory.findMany({
+        where: { id: { in: territoryIds } },
+        select: { path: true },
+      });
+      if (roots.length === 0) return territoryIds;
+
+      const subtree = await this.prisma.db.territory.findMany({
+        where: { OR: roots.map((root) => ({ path: { startsWith: root.path } })) },
+        select: { id: true },
+      });
+
+      return subtree.map((row) => row.id);
+    });
   }
 
   /**

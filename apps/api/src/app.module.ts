@@ -1,8 +1,8 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, type NestModule } from '@nestjs/common';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
-import { RequestContextInterceptor } from './common/interceptors/request-context.interceptor';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { AppConfigModule } from './config/config.module';
 import { AppConfigService } from './config/app-config.service';
@@ -17,14 +17,19 @@ import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { RolesModule } from './modules/roles/roles.module';
+import { TerritoriesModule } from './modules/territories/territories.module';
 import { UsersModule } from './modules/users/users.module';
 
 /**
  * API root module.
  *
- * Interceptor order is significant. Nest runs global interceptors in
- * registration order, so RequestContext must come first — the transform
- * interceptor and every downstream service read the context it establishes.
+ * Layer order matters here and is easy to get wrong: Nest runs
+ * middleware → guards → interceptors → pipes → handler.
+ *
+ * The request context is established in MIDDLEWARE, because the auth guard
+ * populates it and guards run before interceptors. Putting it in an interceptor
+ * meant the guard wrote to a context that did not exist yet, leaving every
+ * scoped query with no caller — see request-context.middleware.ts.
  */
 @Module({
   imports: [
@@ -53,13 +58,19 @@ import { UsersModule } from './modules/users/users.module';
     AuthModule,
     UsersModule,
     RolesModule,
+    TerritoriesModule,
     AuditModule,
     HealthModule,
   ],
   providers: [
-    { provide: APP_INTERCEPTOR, useClass: RequestContextInterceptor },
     { provide: APP_INTERCEPTOR, useClass: TransformInterceptor },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    // Every route, including the health checks — a request without a
+    // correlation id is a request nobody can trace.
+    consumer.apply(RequestContextMiddleware).forRoutes('*path');
+  }
+}
