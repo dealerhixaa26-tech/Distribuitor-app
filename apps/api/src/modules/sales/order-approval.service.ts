@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { Money, type CreditCheckResult } from '@hixaa/contracts';
+import {
+  Money,
+  OUTSTANDING_INVOICE_STATUSES,
+  type CreditCheckResult,
+} from '@hixaa/contracts';
 import { PinoLogger } from 'nestjs-pino';
 import {
   CreditLimitExceededError,
@@ -69,9 +73,32 @@ export class OrderApprovalService {
     });
 
     const committedOrders = Money.of(openOrders._sum.grandTotal?.toFixed(4) ?? '0');
-    // Phase 8: outstanding invoice balance joins here. Named rather than
-    // inlined as zero so the addition is visible when it becomes real.
-    const outstandingInvoices = Money.zero();
+
+    /*
+     * Phase 8, as predicted: one line, because the shape was right.
+     *
+     * `amountOutstanding` is trigger-maintained from
+     * `grandTotal − amountPaid − amountCredited`, so it cannot drift from the
+     * document it describes. `OUTSTANDING_INVOICE_STATUSES` is shared with
+     * `OutstandingService` so the aging report and the credit check cannot
+     * disagree about what "outstanding" means.
+     *
+     * ⚠️ Consequence worth stating plainly: every distributor's available
+     * credit DROPS the moment this ships, because exposure now includes money
+     * genuinely owed that the system previously ignored. That is a correction,
+     * not a regression — orders that newly require a credit override are orders
+     * that always should have.
+     */
+    const invoiceBalance = await this.prisma.db.invoice.aggregate({
+      where: {
+        distributorId: input.distributorId,
+        status: { in: [...OUTSTANDING_INVOICE_STATUSES] },
+      },
+      _sum: { amountOutstanding: true },
+    });
+    const outstandingInvoices = Money.of(
+      invoiceBalance._sum.amountOutstanding?.toFixed(4) ?? '0',
+    );
 
     const currentExposure = committedOrders.add(outstandingInvoices);
     const creditLimit = Money.of(distributor.creditLimit.toFixed(4));

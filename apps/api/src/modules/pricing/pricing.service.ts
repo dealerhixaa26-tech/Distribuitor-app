@@ -439,7 +439,20 @@ export class PricingService {
 
   // ── Step 5: the rate in force on the day ──────────────────────────────────
 
-  private async resolveTaxRate(hsnSacCode: string, asOfDate: Date): Promise<TaxRateRow | null> {
+  /**
+   * The authoritative GST rate for a code on a date, or null when none covers it.
+   *
+   * PUBLIC because Phase 8 asks the same question for a different reason: a
+   * quote falls back to the product's snapshot rate when this returns null,
+   * while an invoice REFUSES TO ISSUE (docs/23 §5.1 refusal 3). Two consumers,
+   * one lookup — a second implementation in the finance module would be free to
+   * drift on the date-effectivity rule, which is the part that is easy to get
+   * subtly wrong.
+   *
+   * Note that invoicing passes the INVOICE's date, not the order's: the rate
+   * that matters legally is the one in force when the supply is documented.
+   */
+  async resolveTaxRate(hsnSacCode: string, asOfDate: Date): Promise<TaxRateRow | null> {
     return this.prisma.db.taxRate.findFirst({
       where: {
         hsnSacCode,

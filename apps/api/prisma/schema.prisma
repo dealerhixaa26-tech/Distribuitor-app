@@ -161,10 +161,10 @@ model User {
   passwordResetTokens    PasswordResetToken[]
   emailVerificationToken EmailVerificationToken[]
   teamMemberships        TeamMember[]
-  managedTeams           Team[]                    @relation("TeamManager")
-  managedTerritories     Territory[]               @relation("TerritoryManager")
-  managedDistributors    Distributor[]             @relation("DistributorAccountManager")
-  distributorNotes       DistributorNote[]         @relation("DistributorNoteAuthor")
+  managedTeams           Team[]                   @relation("TeamManager")
+  managedTerritories     Territory[]              @relation("TerritoryManager")
+  managedDistributors    Distributor[]            @relation("DistributorAccountManager")
+  distributorNotes       DistributorNote[]        @relation("DistributorNoteAuthor")
   auditLogs              AuditLog[]
   notifications          Notification[]
   notificationPrefs      NotificationPreference[]
@@ -328,7 +328,7 @@ model MfaFactor {
   type   MfaType @default(TOTP)
 
   /// AES-256-GCM encrypted at rest. See docs/06-security.md §7.
-  secretEncrypted String  @map("secret_encrypted")
+  secretEncrypted String   @map("secret_encrypted")
   /// Hashed single-use recovery codes.
   backupCodes     String[] @map("backup_codes")
 
@@ -375,8 +375,8 @@ model TeamMember {
 }
 
 model ApiKey {
-  id     String @id @default(uuid(7)) @db.Uuid
-  name   String
+  id      String @id @default(uuid(7)) @db.Uuid
+  name    String
   /// SHA-256 of the key. The raw value is shown once, at creation.
   keyHash String @unique @map("key_hash")
   prefix  String
@@ -549,9 +549,9 @@ model Document {
   storageKey String          @unique @map("storage_key")
   provider   StorageProvider @default(LOCAL)
 
-  originalName String @map("original_name")
-  mimeType     String @map("mime_type")
-  sizeBytes    BigInt @map("size_bytes")
+  originalName   String @map("original_name")
+  mimeType       String @map("mime_type")
+  sizeBytes      BigInt @map("size_bytes")
   /// Integrity check and cheap deduplication key.
   checksumSha256 String @map("checksum_sha256")
 
@@ -569,10 +569,10 @@ model Document {
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
 
-  uploadedBy User?          @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
-  links      DocumentLink[]
-  kycRecords DistributorDocument[]
-  agreements Agreement[]
+  uploadedBy   User?                 @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  links        DocumentLink[]
+  kycRecords   DistributorDocument[]
+  agreements   Agreement[]
   productMedia ProductMedia[]
 
   @@index([checksumSha256])
@@ -587,8 +587,8 @@ model DocumentLink {
   id         String @id @default(uuid(7)) @db.Uuid
   documentId String @map("document_id") @db.Uuid
 
-  entityType String @map("entity_type")
-  entityId   String @map("entity_id") @db.Uuid
+  entityType String  @map("entity_type")
+  entityId   String  @map("entity_id") @db.Uuid
   purpose    String?
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -634,6 +634,14 @@ model NumberSequence {
   key    String @unique
   prefix String
 
+  /// What joins the prefix to the counter — `HTPL/INV/2026-27` + `/` + `00001`.
+  ///
+  /// Per-sequence rather than hardcoded because the financial series use `/`
+  /// (the format the CA expects — open question E2) while codes already issued
+  /// under `DIST-00001` must keep their hyphen. A discontinuity WITHIN a series
+  /// is what an auditor asks about; a difference between series is cosmetic.
+  separator String @default("-")
+
   nextValue Int @default(1) @map("next_value")
   padding   Int @default(5)
 
@@ -652,9 +660,9 @@ model IdempotencyKey {
   id  String @id @default(uuid(7)) @db.Uuid
   key String
 
-  userId      String  @map("user_id") @db.Uuid
+  userId      String @map("user_id") @db.Uuid
   endpoint    String
-  requestHash String  @map("request_hash")
+  requestHash String @map("request_hash")
 
   responseStatus Int?  @map("response_status")
   responseBody   Json? @map("response_body")
@@ -714,13 +722,13 @@ model Country {
 /// line is taxed CGST+SGST or IGST. A wrong value produces legally defective
 /// invoices. See docs/02-data-model.md §7.
 model State {
-  id           String @id @default(uuid(7)) @db.Uuid
-  countryId    String @map("country_id") @db.Uuid
-  name         String
+  id               String  @id @default(uuid(7)) @db.Uuid
+  countryId        String  @map("country_id") @db.Uuid
+  name             String
   /// Postal abbreviation, e.g. MH.
-  code         String
+  code             String
   /// Two-digit GST code, e.g. 27. Matches GSTIN characters 1–2.
-  gstStateCode String @unique @map("gst_state_code")
+  gstStateCode     String  @unique @map("gst_state_code")
   /// Union territories are taxed with UTGST rather than SGST.
   isUnionTerritory Boolean @default(false) @map("is_union_territory")
 
@@ -729,9 +737,9 @@ model State {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  country    Country     @relation(fields: [countryId], references: [id])
-  cities     City[]
-  addresses  Address[]
+  country     Country     @relation(fields: [countryId], references: [id])
+  cities      City[]
+  addresses   Address[]
   territories Territory[]
 
   @@unique([countryId, code])
@@ -740,8 +748,8 @@ model State {
 }
 
 model City {
-  id      String @id @default(uuid(7)) @db.Uuid
-  stateId String @map("state_id") @db.Uuid
+  id      String  @id @default(uuid(7)) @db.Uuid
+  stateId String  @map("state_id") @db.Uuid
   name    String
   /// Optional default PIN, useful for address autocomplete.
   pincode String?
@@ -763,17 +771,17 @@ model City {
 /// than being polymorphic — a real foreign key is enforceable and joinable;
 /// an entityType/entityId pair is neither.
 model Address {
-  id      String  @id @default(uuid(7)) @db.Uuid
-  label   String?
-  line1   String
-  line2   String?
+  id       String  @id @default(uuid(7)) @db.Uuid
+  label    String?
+  line1    String
+  line2    String?
   landmark String?
 
-  cityId     String? @map("city_id") @db.Uuid
-  cityName   String  @map("city_name")
-  stateId    String  @map("state_id") @db.Uuid
-  postalCode String  @map("postal_code")
-  countryCode String @default("IN") @map("country_code")
+  cityId      String? @map("city_id") @db.Uuid
+  cityName    String  @map("city_name")
+  stateId     String  @map("state_id") @db.Uuid
+  postalCode  String  @map("postal_code")
+  countryCode String  @default("IN") @map("country_code")
 
   latitude  Decimal? @db.Decimal(10, 7)
   longitude Decimal? @db.Decimal(10, 7)
@@ -788,7 +796,7 @@ model Address {
   state State @relation(fields: [stateId], references: [id])
   city  City? @relation(fields: [cityId], references: [id])
 
-  warehouses          Warehouse[]
+  warehouses           Warehouse[]
   billingDistributors  Distributor[] @relation("DistributorBilling")
   shippingDistributors Distributor[] @relation("DistributorShipping")
   billingCustomers     Customer[]    @relation("CustomerBilling")
@@ -994,9 +1002,9 @@ model Distributor {
   msmeNumber String? @map("msme_number")
 
   // ── Commercial terms ────────────────────────────────────────────────────
-  creditLimit    Decimal @default(0) @map("credit_limit") @db.Decimal(18, 4)
-  creditDays     Int     @default(30) @map("credit_days")
-  openingBalance Decimal @default(0) @map("opening_balance") @db.Decimal(18, 4)
+  creditLimit      Decimal @default(0) @map("credit_limit") @db.Decimal(18, 4)
+  creditDays       Int     @default(30) @map("credit_days")
+  openingBalance   Decimal @default(0) @map("opening_balance") @db.Decimal(18, 4)
   paymentTermsCode String? @map("payment_terms_code")
 
   // ── Banking. The account number is encrypted at rest (AES-256-GCM). ──────
@@ -1008,9 +1016,9 @@ model Distributor {
   website String?
   tags    String[]
 
-  onboardedAt   DateTime? @map("onboarded_at") @db.Timestamptz(3)
-  suspendedAt   DateTime? @map("suspended_at") @db.Timestamptz(3)
-  statusReason  String?   @map("status_reason")
+  onboardedAt  DateTime? @map("onboarded_at") @db.Timestamptz(3)
+  suspendedAt  DateTime? @map("suspended_at") @db.Timestamptz(3)
+  statusReason String?   @map("status_reason")
 
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1018,17 +1026,17 @@ model Distributor {
   createdById String?   @map("created_by_id") @db.Uuid
   updatedById String?   @map("updated_by_id") @db.Uuid
 
-  territory      Territory? @relation(fields: [territoryId], references: [id])
-  accountManager User?      @relation("DistributorAccountManager", fields: [accountManagerId], references: [id], onDelete: SetNull)
-  billingAddress  Address?  @relation("DistributorBilling", fields: [billingAddressId], references: [id])
-  shippingAddress Address?  @relation("DistributorShipping", fields: [shippingAddressId], references: [id])
+  territory       Territory? @relation(fields: [territoryId], references: [id])
+  accountManager  User?      @relation("DistributorAccountManager", fields: [accountManagerId], references: [id], onDelete: SetNull)
+  billingAddress  Address?   @relation("DistributorBilling", fields: [billingAddressId], references: [id])
+  shippingAddress Address?   @relation("DistributorShipping", fields: [shippingAddressId], references: [id])
 
   priceList PriceList? @relation(fields: [priceListId], references: [id], onDelete: Restrict)
 
-  contacts  DistributorContact[]
-  documents DistributorDocument[]
-  notes     DistributorNote[]
-  agreements Agreement[]
+  contacts           DistributorContact[]
+  documents          DistributorDocument[]
+  notes              DistributorNote[]
+  agreements         Agreement[]
   /// The authorized catalog — which products this partner may buy (Phase 4).
   authorizedProducts DistributorProduct[]
   /// Distributor-owned warehouses, and the serials shipped to this partner.
@@ -1038,6 +1046,10 @@ model Distributor {
   customers          Customer[]
   quotations         Quotation[]
   orders             Order[]
+  // ── Finance (Phase 8) ───────────────────────────────────────────────────
+  invoices           Invoice[]
+  payments           Payment[]
+  ledgerEntries      LedgerEntry[]
 
   @@index([status, territoryId])
   @@index([priceListId])
@@ -1049,8 +1061,8 @@ model Distributor {
 }
 
 model DistributorContact {
-  id            String  @id @default(uuid(7)) @db.Uuid
-  distributorId String  @map("distributor_id") @db.Uuid
+  id            String @id @default(uuid(7)) @db.Uuid
+  distributorId String @map("distributor_id") @db.Uuid
 
   name        String
   designation String?
@@ -1081,11 +1093,11 @@ model DistributorDocument {
   type          KycDocumentType
 
   /// Certificates expire; an expiry sweep warns before they lapse.
-  expiresAt    DateTime? @map("expires_at") @db.Timestamptz(3)
-  verifiedAt   DateTime? @map("verified_at") @db.Timestamptz(3)
-  verifiedById String?   @map("verified_by_id") @db.Uuid
-  rejectedAt   DateTime? @map("rejected_at") @db.Timestamptz(3)
-  rejectionReason String? @map("rejection_reason")
+  expiresAt       DateTime? @map("expires_at") @db.Timestamptz(3)
+  verifiedAt      DateTime? @map("verified_at") @db.Timestamptz(3)
+  verifiedById    String?   @map("verified_by_id") @db.Uuid
+  rejectedAt      DateTime? @map("rejected_at") @db.Timestamptz(3)
+  rejectionReason String?   @map("rejection_reason")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1207,11 +1219,11 @@ enum DiscountType {
 /// GSTR-1 is filed: "pieces" is rejected where `NOS` is required, and finding
 /// that out at filing time means re-issuing invoices.
 model UnitOfMeasure {
-  id   String @id @default(uuid(7)) @db.Uuid
-  code String @unique
-  name String
+  id        String  @id @default(uuid(7)) @db.Uuid
+  code      String  @unique
+  name      String
   /// The GST Unit Quantity Code — NOS, SET, MTR, KGS, HRS…
-  uqc  String
+  uqc       String
   /// Decimal places allowed. 0 for NOS: half a gateway is not a thing.
   precision Int     @default(0)
   isActive  Boolean @default(true) @map("is_active")
@@ -1232,10 +1244,10 @@ model Brand {
   name String
   slug String @unique
 
-  description String?
-  website     String?
+  description    String?
+  website        String?
   logoDocumentId String? @map("logo_document_id") @db.Uuid
-  isActive    Boolean @default(true) @map("is_active")
+  isActive       Boolean @default(true) @map("is_active")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1265,11 +1277,11 @@ model Category {
   path  String @default("")
   depth Int    @default(0)
 
-  description String?
+  description     String?
   /// Display order among siblings.
-  sortOrder   Int     @default(0) @map("sort_order")
+  sortOrder       Int     @default(0) @map("sort_order")
   imageDocumentId String? @map("image_document_id") @db.Uuid
-  isActive    Boolean @default(true) @map("is_active")
+  isActive        Boolean @default(true) @map("is_active")
 
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1356,9 +1368,9 @@ model Product {
   media          ProductMedia[]
   revisions      ProductRevision[]
   /// This product's own components…
-  bomComponents  ProductBom[]         @relation("BomParent")
+  bomComponents  ProductBom[]           @relation("BomParent")
   /// …and the assemblies this product is a component of.
-  bomUsedIn      ProductBom[]         @relation("BomComponent")
+  bomUsedIn      ProductBom[]           @relation("BomComponent")
   priceListItems PriceListItem[]
   authorizedFor  DistributorProduct[]
 
@@ -1374,6 +1386,9 @@ model Product {
   // ── Sales (Phase 7) ─────────────────────────────────────────────────────
   quotationLines    QuotationLine[]
   orderLines        OrderLine[]
+  // ── Finance (Phase 8) ───────────────────────────────────────────────────
+  invoiceLines      InvoiceLine[]
+  taxNoteLines      TaxNoteLine[]
 
   @@index([categoryId, status])
   @@index([brandId])
@@ -1382,7 +1397,6 @@ model Product {
   @@index([hsnCode])
   @@index([sacCode])
   @@index([deletedAt])
-
   // Declared HERE rather than only in raw SQL. An index Prisma does not know
   // about is one the next `migrate dev` diff proposes DROPPING — it compares
   // the whole database against this file. Partial indexes escape that (Prisma
@@ -1423,6 +1437,7 @@ model ProductVariant {
   stockCountLines StockCountLine[]
   quotationLines  QuotationLine[]
   orderLines      OrderLine[]
+  invoiceLines    InvoiceLine[]
 
   @@index([productId, isActive])
   @@index([deletedAt])
@@ -1538,7 +1553,7 @@ model PriceList {
   name   String
   status PriceListStatus @default(DRAFT)
 
-  currency  String     @default("INR") @db.Char(3)
+  currency   String     @default("INR") @db.Char(3)
   /// ADR-0008: Hixaa quotes ex-GST. Stored, not assumed.
   priceBasis PriceBasis @default(EXCLUSIVE) @map("price_basis")
 
@@ -1563,9 +1578,9 @@ model PriceList {
   clonedFrom PriceList?  @relation("PriceListVersions", fields: [clonedFromId], references: [id], onDelete: SetNull)
   clones     PriceList[] @relation("PriceListVersions")
 
-  items               PriceListItem[]
-  distributors        Distributor[]
-  customFor           DistributorProduct[]
+  items        PriceListItem[]
+  distributors Distributor[]
+  customFor    DistributorProduct[]
 
   @@index([status, validFrom])
   @@index([deletedAt])
@@ -1609,10 +1624,10 @@ model PriceListItem {
 /// priority wins and the rest are reported as considered-and-rejected. See
 /// ADR-0007 §3 for why.
 model DiscountRule {
-  id     String        @id @default(uuid(7)) @db.Uuid
-  code   String        @unique
-  name   String
-  scope  DiscountScope @default(GLOBAL)
+  id    String        @id @default(uuid(7)) @db.Uuid
+  code  String        @unique
+  name  String
+  scope DiscountScope @default(GLOBAL)
 
   /// The scoped entity's id — a product, category, distributor, or price list.
   /// Polymorphic, so no FK is possible; the service validates existence against
@@ -1623,8 +1638,8 @@ model DiscountRule {
   /// A percentage (0–100) when type is PERCENT, else an absolute amount.
   value Decimal      @db.Decimal(18, 4)
 
-  minQty    Decimal? @map("min_qty") @db.Decimal(18, 4)
-  minAmount Decimal? @map("min_amount") @db.Decimal(18, 4)
+  minQty            Decimal? @map("min_qty") @db.Decimal(18, 4)
+  minAmount         Decimal? @map("min_amount") @db.Decimal(18, 4)
   /// Caps a PERCENT discount in absolute terms. Null means uncapped.
   maxDiscountAmount Decimal? @map("max_discount_amount") @db.Decimal(18, 4)
 
@@ -1694,12 +1709,12 @@ model DistributorProduct {
   /// bespoke-terms escape hatch, without cloning a whole list for one SKU.
   customPriceListId String? @map("custom_price_list_id") @db.Uuid
 
-  isActive      Boolean  @default(true) @map("is_active")
-  authorizedAt  DateTime @default(now()) @map("authorized_at") @db.Timestamptz(3)
+  isActive     Boolean  @default(true) @map("is_active")
+  authorizedAt DateTime @default(now()) @map("authorized_at") @db.Timestamptz(3)
   /// Ceiling on how much of this product the partner may order at once. Null
   /// means unlimited. Enforced by the order module in Phase 7.
-  maxOrderQty   Decimal? @map("max_order_qty") @db.Decimal(18, 4)
-  notes         String?
+  maxOrderQty  Decimal? @map("max_order_qty") @db.Decimal(18, 4)
+  notes        String?
 
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1797,9 +1812,9 @@ model Batch {
 /// is why there is no `deletedAt` and no `updatedAt` here, and why a database
 /// trigger blocks UPDATE and DELETE outright (migration 0007).
 model StockLedgerEntry {
-  id          String @id @default(uuid(7)) @db.Uuid
-  warehouseId String @map("warehouse_id") @db.Uuid
-  productId   String @map("product_id") @db.Uuid
+  id          String  @id @default(uuid(7)) @db.Uuid
+  warehouseId String  @map("warehouse_id") @db.Uuid
+  productId   String  @map("product_id") @db.Uuid
   variantId   String? @map("variant_id") @db.Uuid
   batchId     String? @map("batch_id") @db.Uuid
 
@@ -1981,8 +1996,8 @@ model StockTransfer {
   code   String         @unique
   status TransferStatus @default(DRAFT)
 
-  sourceWarehouseId      String @map("source_warehouse_id") @db.Uuid
-  destinationWarehouseId String @map("destination_warehouse_id") @db.Uuid
+  sourceWarehouseId      String  @map("source_warehouse_id") @db.Uuid
+  destinationWarehouseId String  @map("destination_warehouse_id") @db.Uuid
   /// Where stock rests in between. Null falls back to the source, which keeps
   /// the transfer usable before a TRANSIT warehouse has been configured.
   transitWarehouseId     String? @map("transit_warehouse_id") @db.Uuid
@@ -1996,8 +2011,8 @@ model StockTransfer {
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
   createdById String?   @map("created_by_id") @db.Uuid
 
-  source      Warehouse @relation("TransferSource", fields: [sourceWarehouseId], references: [id], onDelete: Restrict)
-  destination Warehouse @relation("TransferDestination", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
+  source      Warehouse           @relation("TransferSource", fields: [sourceWarehouseId], references: [id], onDelete: Restrict)
+  destination Warehouse           @relation("TransferDestination", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
   lines       StockTransferLine[]
 
   @@index([status, createdAt(sort: Desc)])
@@ -2012,7 +2027,7 @@ model StockTransferLine {
   productId  String  @map("product_id") @db.Uuid
   variantId  String? @map("variant_id") @db.Uuid
 
-  quantity Decimal @db.Decimal(18, 4)
+  quantity         Decimal  @db.Decimal(18, 4)
   /// Short receipts are normal — damage, miscount. Recorded rather than
   /// silently reconciled, so the difference is investigable.
   quantityReceived Decimal? @map("quantity_received") @db.Decimal(18, 4)
@@ -2036,10 +2051,10 @@ model InventorySetting {
   productId   String @map("product_id") @db.Uuid
   warehouseId String @map("warehouse_id") @db.Uuid
 
-  reorderLevel    Decimal @default(0) @map("reorder_level") @db.Decimal(18, 4)
-  reorderQuantity Decimal @default(0) @map("reorder_quantity") @db.Decimal(18, 4)
+  reorderLevel    Decimal  @default(0) @map("reorder_level") @db.Decimal(18, 4)
+  reorderQuantity Decimal  @default(0) @map("reorder_quantity") @db.Decimal(18, 4)
   maxLevel        Decimal? @map("max_level") @db.Decimal(18, 4)
-  alertEnabled    Boolean @default(true) @map("alert_enabled")
+  alertEnabled    Boolean  @default(true) @map("alert_enabled")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -2170,10 +2185,10 @@ enum ApprovalKind {
 /// Distributor, which is a channel partner. A SECONDARY (sell-out) order is
 /// distributor → customer; a PRIMARY order is Hixaa → distributor.
 model Customer {
-  id     String       @id @default(uuid(7)) @db.Uuid
-  code   String       @unique
-  name   String
-  type   CustomerType @default(INDUSTRIAL)
+  id   String       @id @default(uuid(7)) @db.Uuid
+  code String       @unique
+  name String
+  type CustomerType @default(INDUSTRIAL)
 
   /// Which distributor services this customer, if any. Sell-out is reported
   /// against the pair.
@@ -2189,7 +2204,7 @@ model Customer {
 
   /// The plant or site, where that differs from the billing entity — a single
   /// power utility may have many.
-  siteName String? @map("site_name")
+  siteName String?  @map("site_name")
   website  String?
   notes    String?
   tags     String[]
@@ -2208,9 +2223,12 @@ model Customer {
   billingAddress  Address?     @relation("CustomerBilling", fields: [billingAddressId], references: [id])
   shippingAddress Address?     @relation("CustomerShipping", fields: [shippingAddressId], references: [id])
 
-  contacts   CustomerContact[]
-  quotations Quotation[]
-  orders     Order[]
+  contacts      CustomerContact[]
+  quotations    Quotation[]
+  orders        Order[]
+  invoices      Invoice[]
+  payments      Payment[]
+  ledgerEntries LedgerEntry[]
 
   @@index([territoryId, isActive])
   @@index([distributorId])
@@ -2221,13 +2239,13 @@ model Customer {
 }
 
 model CustomerContact {
-  id         String  @id @default(uuid(7)) @db.Uuid
-  customerId String  @map("customer_id") @db.Uuid
-  name       String
+  id          String  @id @default(uuid(7)) @db.Uuid
+  customerId  String  @map("customer_id") @db.Uuid
+  name        String
   designation String?
-  email      String?
-  phone      String?
-  isPrimary  Boolean @default(false) @map("is_primary")
+  email       String?
+  phone       String?
+  isPrimary   Boolean @default(false) @map("is_primary")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -2276,10 +2294,10 @@ model Quotation {
   termsAndConditions String? @map("terms_and_conditions")
   notes              String?
 
-  sentAt     DateTime? @map("sent_at") @db.Timestamptz(3)
-  acceptedAt DateTime? @map("accepted_at") @db.Timestamptz(3)
-  rejectedAt DateTime? @map("rejected_at") @db.Timestamptz(3)
-  rejectionReason String? @map("rejection_reason")
+  sentAt          DateTime? @map("sent_at") @db.Timestamptz(3)
+  acceptedAt      DateTime? @map("accepted_at") @db.Timestamptz(3)
+  rejectedAt      DateTime? @map("rejected_at") @db.Timestamptz(3)
+  rejectionReason String?   @map("rejection_reason")
 
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -2313,10 +2331,10 @@ model QuotationLine {
 
   /// Snapshotted: a product renamed later must not rewrite a document the
   /// customer already holds.
-  sku         String
-  description String
+  sku             String
+  description     String
   /// Which revision of the product this was quoted against.
-  productRevision Int @default(1) @map("product_revision")
+  productRevision Int    @default(1) @map("product_revision")
 
   quantity Decimal @db.Decimal(18, 4)
   uomCode  String? @map("uom_code")
@@ -2370,8 +2388,8 @@ model Order {
   placeOfSupplyStateCode String? @map("place_of_supply_state_code")
   priceListId            String? @map("price_list_id") @db.Uuid
 
-  orderDate    DateTime  @map("order_date") @db.Date
-  expectedDate DateTime? @map("expected_date") @db.Date
+  orderDate        DateTime  @map("order_date") @db.Date
+  expectedDate     DateTime? @map("expected_date") @db.Date
   /// The partner's own reference, quoted back on documents.
   customerPoNumber String?   @map("customer_po_number")
   customerPoDate   DateTime? @map("customer_po_date") @db.Date
@@ -2395,14 +2413,14 @@ model Order {
   /// True when the credit limit was breached and a Finance Manager overrode it.
   /// Kept on the order, not only in the audit log, so the exception is visible
   /// on the record itself rather than requiring an audit search.
-  creditOverridden       Boolean @default(false) @map("credit_overridden")
-  creditOverrideReason   String? @map("credit_override_reason")
+  creditOverridden     Boolean @default(false) @map("credit_overridden")
+  creditOverrideReason String? @map("credit_override_reason")
 
-  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(3)
-  approvedAt  DateTime? @map("approved_at") @db.Timestamptz(3)
-  approvedById String?  @map("approved_by_id") @db.Uuid
-  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
-  statusReason String?  @map("status_reason")
+  submittedAt  DateTime? @map("submitted_at") @db.Timestamptz(3)
+  approvedAt   DateTime? @map("approved_at") @db.Timestamptz(3)
+  approvedById String?   @map("approved_by_id") @db.Uuid
+  cancelledAt  DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  statusReason String?   @map("status_reason")
 
   notes String?
 
@@ -2421,6 +2439,7 @@ model Order {
   shipments    Shipment[]
   timeline     OrderTimeline[]
   reservations StockReservation[]
+  invoices     Invoice[]
 
   @@index([status, orderDate(sort: Desc)])
   @@index([distributorId, status])
@@ -2441,16 +2460,16 @@ model OrderLine {
 
   sku             String
   description     String
-  productRevision Int @default(1) @map("product_revision")
+  productRevision Int    @default(1) @map("product_revision")
 
   quantity Decimal @db.Decimal(18, 4)
   uomCode  String? @map("uom_code")
 
   /// ADR-0012: approval reserves what exists and backorders the rest, so a line
   /// tracks three quantities. `quantity` is what was ordered and never changes.
-  quantityReserved    Decimal @default(0) @map("quantity_reserved") @db.Decimal(18, 4)
-  quantityBackordered Decimal @default(0) @map("quantity_backordered") @db.Decimal(18, 4)
-  quantityDispatched  Decimal @default(0) @map("quantity_dispatched") @db.Decimal(18, 4)
+  quantityReserved      Decimal   @default(0) @map("quantity_reserved") @db.Decimal(18, 4)
+  quantityBackordered   Decimal   @default(0) @map("quantity_backordered") @db.Decimal(18, 4)
+  quantityDispatched    Decimal   @default(0) @map("quantity_dispatched") @db.Decimal(18, 4)
   /// From the product's lead time. An estimate, and labelled as one.
   expectedAvailableDate DateTime? @map("expected_available_date") @db.Date
 
@@ -2481,6 +2500,7 @@ model OrderLine {
   variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
 
   shipmentLines ShipmentLine[]
+  invoiceLines  InvoiceLine[]
 
   @@unique([orderId, lineNumber])
   @@index([productId])
@@ -2497,7 +2517,7 @@ model OrderApproval {
 
   /// The figure approved and the ceiling the approver held, both recorded so
   /// the decision is explicable without re-deriving anyone's permissions.
-  requestedValue Decimal  @map("requested_value") @db.Decimal(18, 4)
+  requestedValue  Decimal  @map("requested_value") @db.Decimal(18, 4)
   approverCeiling Decimal? @map("approver_ceiling") @db.Decimal(18, 4)
 
   approvedById String  @map("approved_by_id") @db.Uuid
@@ -2521,12 +2541,12 @@ model Shipment {
   warehouseId String @map("warehouse_id") @db.Uuid
 
   // ── Carriage ────────────────────────────────────────────────────────────
-  carrierName   String? @map("carrier_name")
+  carrierName   String?  @map("carrier_name")
   /// Lorry Receipt number — the consignment note the transporter issues.
-  lrNumber      String? @map("lr_number")
-  vehicleNumber String? @map("vehicle_number")
-  driverName    String? @map("driver_name")
-  driverPhone   String? @map("driver_phone")
+  lrNumber      String?  @map("lr_number")
+  vehicleNumber String?  @map("vehicle_number")
+  driverName    String?  @map("driver_name")
+  driverPhone   String?  @map("driver_phone")
   freightAmount Decimal? @map("freight_amount") @db.Decimal(18, 4)
 
   packedAt     DateTime? @map("packed_at") @db.Timestamptz(3)
@@ -2561,7 +2581,7 @@ model ShipmentLine {
   shipmentId  String @map("shipment_id") @db.Uuid
   orderLineId String @map("order_line_id") @db.Uuid
 
-  quantity Decimal @db.Decimal(18, 4)
+  quantity Decimal  @db.Decimal(18, 4)
   /// Serials dispatched on this line, captured at dispatch (ADR-0009). Held as
   /// an array rather than a join because they are written once and read as a
   /// set — there is no per-serial state to track here.
@@ -2576,6 +2596,516 @@ model ShipmentLine {
   @@unique([shipmentId, orderLineId])
   @@index([orderLineId])
   @@map("shipment_line")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FINANCE (Phase 8) — see docs/23-phase-8-design.md
+//
+// The phase with real legal exposure. Two rules shape everything below:
+//
+//   • An issued document is FROZEN, by database trigger, not by a service check
+//     (ADR-0016). A service check protects the one path it sits on; this
+//     codebase has twice shipped a control that silently did nothing.
+//   • What a party owes is the SUM of an append-only ledger, never a stored
+//     balance (ADR-0015). A balance column's failure mode is that it stays
+//     plausible while diverging from the documents.
+//
+// None of these models carries `deletedAt`. Financial documents are cancelled,
+// never deleted — which also keeps them out of the soft-delete extension by
+// construction rather than by discipline.
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+/// Which GSTR-1 table this invoice lands in. Classified at issue and
+/// snapshotted, because the rule reads the counterparty's GSTIN and the
+/// invoice value AT THAT MOMENT — both of which can change afterwards.
+enum SupplyType {
+  /// Counterparty holds a GSTIN. GSTR-1 table 4.
+  B2B
+  /// Unregistered, inter-state, above the B2CL threshold. Table 5.
+  B2CL
+  /// Unregistered, everything else. Table 7, reported as a consolidated total.
+  B2CS
+  EXPORT
+  SEZ
+}
+
+/// CGST s.34 recognises two correction documents with identical structure and
+/// opposite sign. One table, separate number series — see ADR-0017.
+enum TaxNoteType {
+  CREDIT
+  DEBIT
+}
+
+enum TaxNoteStatus {
+  DRAFT
+  ISSUED
+  CANCELLED
+}
+
+/// The statutory reason codes. Required on the document, and GSTR-1 9B carries
+/// them, so this is data rather than free text.
+enum TaxNoteReason {
+  SALES_RETURN
+  RATE_DIFFERENCE
+  QUANTITY_DIFFERENCE
+  POST_SALE_DISCOUNT
+  DEFICIENCY_IN_SERVICE
+  TAX_CORRECTION
+  OTHER
+}
+
+enum PaymentMethod {
+  CASH
+  CHEQUE
+  NEFT
+  RTGS
+  IMPS
+  UPI
+  DEMAND_DRAFT
+  CARD
+  /// A book adjustment rather than money moving — settling against a credit
+  /// balance the party already holds.
+  ADJUSTMENT
+}
+
+/// ADR-0018: RECORDED is a memo with no financial effect; VERIFIED is the
+/// event. Allocation requires VERIFIED.
+enum PaymentStatus {
+  RECORDED
+  VERIFIED
+  BOUNCED
+  CANCELLED
+}
+
+// `LedgerPartyType` is deliberately NOT a Prisma enum.
+//
+// It was one, alongside a `party_id` column, until scoping proved inexpressible
+// against a column with no relation (see `LedgerEntry.distributorId`). The
+// party is now two nullable foreign keys, and the DISTRIBUTOR | CUSTOMER
+// vocabulary lives only in `@hixaa/contracts` where it is the API's shape. A
+// Prisma enum nothing references is a column waiting to be reintroduced.
+
+/// What caused a ledger row. DEBIT increases what the party owes Hixaa — the
+/// convention is stated here, asserted in `ledger.spec.ts`, and nowhere else.
+enum LedgerEntryType {
+  OPENING_BALANCE
+  INVOICE
+  CREDIT_NOTE
+  DEBIT_NOTE
+  PAYMENT
+  /// Tax deducted at source, credited separately from the cash it accompanies:
+  /// TDS is recoverable from the government, cash is in the bank, and they
+  /// reconcile against different statements (ADR-0018 §4).
+  TDS
+  WRITE_OFF
+  ADJUSTMENT
+}
+
+/// A tax invoice. Immutable once issued (ADR-0016) — corrections go through a
+/// TaxNote, which is the only lawful path under CGST s.34.
+model Invoice {
+  id     String        @id @default(uuid(7)) @db.Uuid
+  /// Allocated from the gapless statutory series at ISSUE, never at draft.
+  /// Null while DRAFT, which is what makes a draft free to delete.
+  number String?       @unique
+  status InvoiceStatus @default(DRAFT)
+
+  distributorId String? @map("distributor_id") @db.Uuid
+  customerId    String? @map("customer_id") @db.Uuid
+  /// The order this bills, when there is one. A direct invoice has none and
+  /// prices through PricingService.quote() instead.
+  orderId       String? @map("order_id") @db.Uuid
+
+  /// Both sides of the place-of-supply decision, snapshotted. The supplier's
+  /// state is read from settings today; if the registration ever changes, a
+  /// historical invoice must still say which rule produced its tax split.
+  supplierStateCode      String @map("supplier_state_code")
+  placeOfSupplyStateCode String @map("place_of_supply_state_code")
+
+  supplyType      SupplyType @default(B2B) @map("supply_type")
+  isReverseCharge Boolean    @default(false) @map("is_reverse_charge")
+
+  /// The counterparty's statutory identity AS BILLED. Snapshotted because a
+  /// GSTIN corrected next month must not rewrite a return already filed.
+  counterpartyName  String  @map("counterparty_name")
+  counterpartyGstin String? @map("counterparty_gstin")
+  billingAddressId  String? @map("billing_address_id") @db.Uuid
+  shippingAddressId String? @map("shipping_address_id") @db.Uuid
+
+  invoiceDate      DateTime  @map("invoice_date") @db.Date
+  /// Computed at issue from the order's payment terms and SNAPSHOTTED. Terms
+  /// are editable; a due date printed on a document is not.
+  dueDate          DateTime? @map("due_date") @db.Date
+  paymentTermsCode String?   @map("payment_terms_code")
+
+  customerPoNumber String?   @map("customer_po_number")
+  customerPoDate   DateTime? @map("customer_po_date") @db.Date
+
+  // ── Totals, frozen at issue by trigger ──────────────────────────────────
+  subtotal      Decimal @default(0) @db.Decimal(18, 4)
+  totalDiscount Decimal @default(0) @map("total_discount") @db.Decimal(18, 4)
+  taxableValue  Decimal @default(0) @map("taxable_value") @db.Decimal(18, 4)
+  totalCgst     Decimal @default(0) @map("total_cgst") @db.Decimal(18, 4)
+  totalSgst     Decimal @default(0) @map("total_sgst") @db.Decimal(18, 4)
+  totalIgst     Decimal @default(0) @map("total_igst") @db.Decimal(18, 4)
+  totalCess     Decimal @default(0) @map("total_cess") @db.Decimal(18, 4)
+  totalTax      Decimal @default(0) @map("total_tax") @db.Decimal(18, 4)
+  roundOff      Decimal @default(0) @map("round_off") @db.Decimal(18, 4)
+  grandTotal    Decimal @default(0) @map("grand_total") @db.Decimal(18, 4)
+
+  // ── Settlement — the only money that moves after issue ───────────────────
+  /// Cash plus TDS allocated here.
+  amountPaid        Decimal @default(0) @map("amount_paid") @db.Decimal(18, 4)
+  /// Credit notes less debit notes, so the outstanding identity holds for both
+  /// without a branch (ADR-0017 §4).
+  amountCredited    Decimal @default(0) @map("amount_credited") @db.Decimal(18, 4)
+  /// grandTotal − amountPaid − amountCredited, maintained by a BEFORE trigger.
+  ///
+  /// A trigger rather than a GENERATED column: Prisma diffs GENERATED columns
+  /// as drift and the next `migrate dev` proposes dropping them (HANDOFF
+  /// §4.13). Stored rather than derived because the credit check and the aging
+  /// report both filter on it.
+  amountOutstanding Decimal @default(0) @map("amount_outstanding") @db.Decimal(18, 4)
+
+  notes              String?
+  termsAndConditions String? @map("terms_and_conditions")
+
+  issuedAt        DateTime? @map("issued_at") @db.Timestamptz(3)
+  issuedById      String?   @map("issued_by_id") @db.Uuid
+  sentAt          DateTime? @map("sent_at") @db.Timestamptz(3)
+  cancelledAt     DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  cancelledById   String?   @map("cancelled_by_id") @db.Uuid
+  cancelledReason String?   @map("cancelled_reason")
+
+  // ── e-Invoice / e-Way Bill seam (ADR- none; docs/23 §9) ──────────────────
+  // Columns exist so adopting a GSP later is a service binding rather than a
+  // migration against a table holding legal documents. Nothing writes them yet.
+  irn            String?   @unique
+  ackNumber      String?   @map("ack_number")
+  ackDate        DateTime? @map("ack_date") @db.Timestamptz(3)
+  signedQrCode   String?   @map("signed_qr_code")
+  ewayBillNumber String?   @map("eway_bill_number")
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById String?  @map("created_by_id") @db.Uuid
+
+  distributor Distributor? @relation(fields: [distributorId], references: [id], onDelete: Restrict)
+  customer    Customer?    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  order       Order?       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  lines       InvoiceLine[]
+  allocations PaymentAllocation[]
+  taxNotes    TaxNote[]
+
+  /// Aging and the overdue sweep read `(status, dueDate)` but only ever for
+  /// invoices with something still owing, so migration 0010 adds a PARTIAL
+  /// index on the same columns `WHERE amount_outstanding > 0`. Prisma cannot
+  /// express a partial index — and skips what it cannot model, so it will not
+  /// propose dropping that one (HANDOFF §4.13). This plain index stays for the
+  /// settled-invoice lookups the partial one cannot serve.
+  @@index([status, dueDate])
+  @@index([distributorId, status])
+  @@index([customerId, status])
+  @@index([orderId])
+  @@index([invoiceDate(sort: Desc), id(sort: Desc)])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@map("invoice")
+}
+
+/// One invoiced line. Every value is COPIED from the order line's own snapshot
+/// (ADR-0011), never referenced — a price list can be archived, a discount rule
+/// deleted, a tax rate superseded, and this row still says what was billed.
+model InvoiceLine {
+  id         String @id @default(uuid(7)) @db.Uuid
+  invoiceId  String @map("invoice_id") @db.Uuid
+  lineNumber Int    @map("line_number")
+
+  productId   String  @map("product_id") @db.Uuid
+  variantId   String? @map("variant_id") @db.Uuid
+  /// The order line this bills, so a partial invoice can be reconciled back to
+  /// what was ordered and what has already been billed.
+  orderLineId String? @map("order_line_id") @db.Uuid
+
+  sku             String
+  description     String
+  productRevision Int    @default(1) @map("product_revision")
+
+  quantity Decimal @db.Decimal(18, 4)
+  uomCode  String? @map("uom_code")
+
+  unitListPrice   Decimal @map("unit_list_price") @db.Decimal(18, 4)
+  unitPrice       Decimal @map("unit_price") @db.Decimal(18, 4)
+  discountAmount  Decimal @default(0) @map("discount_amount") @db.Decimal(18, 4)
+  discountPercent Decimal @default(0) @map("discount_percent") @db.Decimal(9, 4)
+
+  taxableValue Decimal @map("taxable_value") @db.Decimal(18, 4)
+  hsnSacCode   String? @map("hsn_sac_code")
+  gstRate      Decimal @default(0) @map("gst_rate") @db.Decimal(5, 2)
+  cessRate     Decimal @default(0) @map("cess_rate") @db.Decimal(5, 2)
+  cgst         Decimal @default(0) @db.Decimal(18, 4)
+  sgst         Decimal @default(0) @db.Decimal(18, 4)
+  igst         Decimal @default(0) @db.Decimal(18, 4)
+  cess         Decimal @default(0) @db.Decimal(18, 4)
+  totalTax     Decimal @default(0) @map("total_tax") @db.Decimal(18, 4)
+  lineTotal    Decimal @map("line_total") @db.Decimal(18, 4)
+
+  /// Which TaxRate row authorised this line's rate, resolved against the
+  /// INVOICE's date. Null means no rate table covered the HSN/SAC, which is a
+  /// PRODUCT_SNAPSHOT fallback — fine for a quote, and refused at issue
+  /// (docs/23 §5.1 refusal 3). Stored so the decision is on the record.
+  taxRateId String? @map("tax_rate_id") @db.Uuid
+
+  notes String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  invoice      Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  product      Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant      ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  orderLine    OrderLine?      @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
+  taxNoteLines TaxNoteLine[]
+
+  @@unique([invoiceId, lineNumber])
+  @@index([productId])
+  @@index([orderLineId])
+  @@map("invoice_line")
+}
+
+/// A credit or debit note under CGST s.34 — the only lawful way to correct an
+/// issued invoice. One table for both types, separate number series (ADR-0017).
+model TaxNote {
+  id     String        @id @default(uuid(7)) @db.Uuid
+  type   TaxNoteType
+  number String?       @unique
+  status TaxNoteStatus @default(DRAFT)
+
+  /// The invoice being corrected. Required: a note that references nothing is
+  /// not a correction, and GSTR-1 9B has nowhere to put it.
+  originalInvoiceId String        @map("original_invoice_id") @db.Uuid
+  reason            TaxNoteReason
+  reasonNote        String?       @map("reason_note")
+
+  /// Snapshotted from the invoice so the note stands alone as a document.
+  supplierStateCode      String  @map("supplier_state_code")
+  placeOfSupplyStateCode String  @map("place_of_supply_state_code")
+  counterpartyName       String  @map("counterparty_name")
+  counterpartyGstin      String? @map("counterparty_gstin")
+
+  noteDate DateTime @map("note_date") @db.Date
+
+  taxableValue Decimal @default(0) @map("taxable_value") @db.Decimal(18, 4)
+  totalCgst    Decimal @default(0) @map("total_cgst") @db.Decimal(18, 4)
+  totalSgst    Decimal @default(0) @map("total_sgst") @db.Decimal(18, 4)
+  totalIgst    Decimal @default(0) @map("total_igst") @db.Decimal(18, 4)
+  totalCess    Decimal @default(0) @map("total_cess") @db.Decimal(18, 4)
+  totalTax     Decimal @default(0) @map("total_tax") @db.Decimal(18, 4)
+  roundOff     Decimal @default(0) @map("round_off") @db.Decimal(18, 4)
+  grandTotal   Decimal @default(0) @map("grand_total") @db.Decimal(18, 4)
+
+  issuedAt    DateTime? @map("issued_at") @db.Timestamptz(3)
+  issuedById  String?   @map("issued_by_id") @db.Uuid
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById String?  @map("created_by_id") @db.Uuid
+
+  originalInvoice Invoice       @relation(fields: [originalInvoiceId], references: [id], onDelete: Restrict)
+  lines           TaxNoteLine[]
+
+  @@index([originalInvoiceId])
+  @@index([type, status, noteDate(sort: Desc)])
+  @@index([noteDate(sort: Desc), id(sort: Desc)])
+  @@map("tax_note")
+}
+
+model TaxNoteLine {
+  id         String @id @default(uuid(7)) @db.Uuid
+  taxNoteId  String @map("tax_note_id") @db.Uuid
+  lineNumber Int    @map("line_number")
+
+  /// The invoice line being corrected, when the note is line-specific. Null for
+  /// a document-level correction such as a post-sale discount.
+  invoiceLineId String? @map("invoice_line_id") @db.Uuid
+  productId     String? @map("product_id") @db.Uuid
+
+  sku         String?
+  description String
+
+  quantity  Decimal? @db.Decimal(18, 4)
+  uomCode   String?  @map("uom_code")
+  unitPrice Decimal? @map("unit_price") @db.Decimal(18, 4)
+
+  taxableValue Decimal @map("taxable_value") @db.Decimal(18, 4)
+  hsnSacCode   String? @map("hsn_sac_code")
+  gstRate      Decimal @default(0) @map("gst_rate") @db.Decimal(5, 2)
+  cessRate     Decimal @default(0) @map("cess_rate") @db.Decimal(5, 2)
+  cgst         Decimal @default(0) @db.Decimal(18, 4)
+  sgst         Decimal @default(0) @db.Decimal(18, 4)
+  igst         Decimal @default(0) @db.Decimal(18, 4)
+  cess         Decimal @default(0) @db.Decimal(18, 4)
+  totalTax     Decimal @default(0) @map("total_tax") @db.Decimal(18, 4)
+  lineTotal    Decimal @map("line_total") @db.Decimal(18, 4)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  taxNote     TaxNote      @relation(fields: [taxNoteId], references: [id], onDelete: Cascade)
+  invoiceLine InvoiceLine? @relation(fields: [invoiceLineId], references: [id], onDelete: Restrict)
+  product     Product?     @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([taxNoteId, lineNumber])
+  @@index([invoiceLineId])
+  @@map("tax_note_line")
+}
+
+/// A receipt. Recording it is a memo; VERIFYING it is the financial event that
+/// touches the ledger, and only a verified payment can be allocated (ADR-0018).
+model Payment {
+  id     String        @id @default(uuid(7)) @db.Uuid
+  number String        @unique
+  status PaymentStatus @default(RECORDED)
+
+  distributorId String? @map("distributor_id") @db.Uuid
+  customerId    String? @map("customer_id") @db.Uuid
+
+  method PaymentMethod
+
+  /// Cash actually received. TDS is held separately because the two reconcile
+  /// against different statements — the bank, and Form 26AS.
+  amount            Decimal @db.Decimal(18, 4)
+  tdsAmount         Decimal @default(0) @map("tds_amount") @db.Decimal(18, 4)
+  /// amount + tdsAmount, less what is already allocated. Maintained alongside
+  /// allocations under the same row lock that prevents over-allocation.
+  unallocatedAmount Decimal @default(0) @map("unallocated_amount") @db.Decimal(18, 4)
+
+  paymentDate DateTime @map("payment_date") @db.Date
+
+  // ── Instrument ──────────────────────────────────────────────────────────
+  referenceNumber String?   @map("reference_number")
+  bankName        String?   @map("bank_name")
+  chequeNumber    String?   @map("cheque_number")
+  chequeDate      DateTime? @map("cheque_date") @db.Date
+
+  notes String?
+
+  recordedById String    @map("recorded_by_id") @db.Uuid
+  /// Must differ from `recordedById`. Enforced in the service as well as by the
+  /// role-level segregation rule, because one PERSON can hold two roles.
+  verifiedById String?   @map("verified_by_id") @db.Uuid
+  verifiedAt   DateTime? @map("verified_at") @db.Timestamptz(3)
+
+  bouncedAt     DateTime? @map("bounced_at") @db.Timestamptz(3)
+  bouncedReason String?   @map("bounced_reason")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  distributor Distributor? @relation(fields: [distributorId], references: [id], onDelete: Restrict)
+  customer    Customer?    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  allocations PaymentAllocation[]
+
+  @@index([status, paymentDate(sort: Desc)])
+  @@index([distributorId, status])
+  @@index([customerId, status])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@map("payment")
+}
+
+/// Which receipt settled which invoice, and by how much. One payment may settle
+/// several invoices and one invoice may take several payments, so this is a
+/// table rather than a column on either side.
+model PaymentAllocation {
+  id        String @id @default(uuid(7)) @db.Uuid
+  paymentId String @map("payment_id") @db.Uuid
+  invoiceId String @map("invoice_id") @db.Uuid
+
+  amount     Decimal @db.Decimal(18, 4)
+  /// The part of `amount` that is TDS rather than cash, so an invoice can
+  /// report how it was settled without joining back through the payment.
+  tdsPortion Decimal @default(0) @map("tds_portion") @db.Decimal(18, 4)
+
+  notes String?
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdById String?  @map("created_by_id") @db.Uuid
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentId, invoiceId])
+  @@index([invoiceId])
+  @@map("payment_allocation")
+}
+
+/// The party ledger — append-only, and the source of truth for what is owed
+/// (ADR-0015).
+///
+/// UPDATE and DELETE are rejected by trigger, exactly as `stock_ledger_entry`
+/// is. A mistake is corrected by a CONTRA entry, so the wrong row stays visible.
+model LedgerEntry {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// The party, as two nullable FKs with a CHECK that exactly one is set —
+  /// the same shape `invoice` and `payment` use.
+  ///
+  /// This began as `partyType` + `partyId`, which reads well and cannot be
+  /// SCOPED: `partyId` deliberately points at one of two tables, so it has no
+  /// relation for the scope extension to nest through, and Prisma has no
+  /// correlated subquery to fall back on. Rather than resolve the caller's
+  /// visible distributor and customer ids on every request, the columns became
+  /// real foreign keys and `viaDistributorOrCustomer()` — already written for
+  /// orders — applies unchanged.
+  ///
+  /// `partyType` is still the API's vocabulary; the service derives it.
+  distributorId String? @map("distributor_id") @db.Uuid
+  customerId    String? @map("customer_id") @db.Uuid
+
+  entryType LedgerEntryType @map("entry_type")
+
+  /// Exactly one of these is non-zero — `CHECK ((debit = 0) <> (credit = 0))`.
+  /// DEBIT increases what the party owes Hixaa.
+  debit  Decimal @default(0) @db.Decimal(18, 4)
+  credit Decimal @default(0) @db.Decimal(18, 4)
+
+  /// What caused this row: `Invoice`, `Payment`, `TaxNote`, or null for a
+  /// manual adjustment.
+  refType   String? @map("ref_type")
+  refId     String? @map("ref_id") @db.Uuid
+  /// The document number as printed, so a statement is readable without joins.
+  refNumber String? @map("ref_number")
+
+  /// The entry this one reverses, for a contra posting.
+  reversesId String? @map("reverses_id") @db.Uuid
+
+  entryDate DateTime @map("entry_date") @db.Date
+  narration String
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdById String?  @map("created_by_id") @db.Uuid
+
+  distributor Distributor? @relation(fields: [distributorId], references: [id], onDelete: Restrict)
+  customer    Customer?    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  /// Statement of account, in order, with a stable tiebreak. `id` is a UUID v7
+  /// so it sorts by insertion time — two entries on the same date still have a
+  /// deterministic order, which a running balance depends on.
+  @@index([distributorId, entryDate, id])
+  @@index([customerId, entryDate, id])
+  @@index([refType, refId])
+  @@index([entryType])
+  @@map("ledger_entry")
 }
 
 /// Append-only event feed per order — the "what happened to this order" screen.

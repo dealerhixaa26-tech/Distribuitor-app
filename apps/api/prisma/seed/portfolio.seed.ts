@@ -272,6 +272,17 @@ export async function seedPortfolio(prisma: PrismaClient): Promise<void> {
         { code: 'NET60', name: 'Net 60', days: 60 },
       ],
     },
+    {
+      category: 'finance',
+      key: 'gst',
+      description:
+        'Statutory thresholds that change by notification. Editable so a rate change is a form, ' +
+        'not a deploy — the B2CL boundary already moved from ₹2.5L to ₹1L on 1 Nov 2024.',
+      value: {
+        b2clThreshold: '100000.0000',
+        hsnDigits: 6,
+      },
+    },
 
     // ── Approval ceilings — configurable, not compiled in ───────────────────
     {

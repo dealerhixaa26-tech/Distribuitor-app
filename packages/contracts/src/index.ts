@@ -33,3 +33,7 @@ export * from './inventory/warehouse.schema';
 export * from './inventory/stock.schema';
 export * from './sales/customer.schema';
 export * from './sales/order.schema';
+export * from './finance/invoice.schema';
+export * from './finance/payment.schema';
+export * from './finance/ledger.schema';
+export * from './finance/gst-return.schema';

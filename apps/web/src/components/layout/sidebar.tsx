@@ -5,6 +5,7 @@ import {
   Boxes,
   Building2,
   FileText,
+  IndianRupee,
   LayoutDashboard,
   Map as MapIcon,
   Package,
@@ -15,6 +16,7 @@ import {
   ShoppingCart,
   Tags,
   Users,
+  Wallet,
   Warehouse,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -122,7 +124,18 @@ const NAV_SECTIONS: Array<{ heading: string; items: NavItem[] }> = [
         href: '/invoices',
         icon: Receipt,
         permission: PERMISSIONS.INVOICE_READ,
-        phase: 8,
+      },
+      {
+        label: 'Payments',
+        href: '/payments',
+        icon: Wallet,
+        permission: PERMISSIONS.PAYMENT_READ,
+      },
+      {
+        label: 'Outstanding',
+        href: '/outstanding',
+        icon: IndianRupee,
+        permission: PERMISSIONS.PAYMENT_READ,
       },
       {
         label: 'Reports',

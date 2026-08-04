@@ -85,6 +85,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         detail: exception.message,
         code: exception.code,
         ...(exception.fieldErrors ? { errors: exception.fieldErrors } : {}),
+        ...(exception.publicExtensions ? { extensions: exception.publicExtensions } : {}),
       };
     }
 

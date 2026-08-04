@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { emailSchema, idSchema } from '../primitives/common';
 import { gstinSchema, panSchema, pincodeSchema } from '../primitives/india';
+import { positiveMoneySchema } from '../primitives/money';
 
 /**
  * System settings.
@@ -86,6 +87,23 @@ export const financeDefaultsSchema = z.object({
   roundInvoiceToWholeRupee: z.boolean().default(true),
 });
 
+/**
+ * GST parameters that the statute changes from time to time.
+ *
+ * A threshold in the law is not a constant in code. The B2CL boundary moved
+ * from ₹2.5 lakh to ₹1 lakh on 1 November 2024, and one that has already moved
+ * once will move again. As a setting it is a form; as a constant it is a deploy.
+ */
+export const financeGstSchema = z.object({
+  /**
+   * Above this invoice value, an inter-state supply to an UNREGISTERED buyer is
+   * reported invoice-wise in GSTR-1 table 5 rather than consolidated in table 7.
+   */
+  b2clThreshold: positiveMoneySchema.default('100000'),
+  /** Reported in GSTR-1 table 12; 6 digits is the requirement for most filers. */
+  hsnDigits: z.number().int().min(4).max(8).default(6),
+});
+
 export const paymentTermsSchema = z.array(
   z.object({
     code: z.string().trim().toUpperCase().min(2).max(20),
@@ -119,6 +137,7 @@ export const SETTING_SCHEMAS: Record<string, z.ZodTypeAny> = {
   'branding.theme': brandingThemeSchema,
   'finance.defaults': financeDefaultsSchema,
   'finance.paymentTerms': paymentTermsSchema,
+  'finance.gst': financeGstSchema,
   'approvals.ceilings': approvalCeilingsSchema,
 };
 

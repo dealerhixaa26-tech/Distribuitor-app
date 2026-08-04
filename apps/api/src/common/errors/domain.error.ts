@@ -1,4 +1,9 @@
-import { ERROR_CODES, type ErrorCode, type FieldError } from '@hixaa/contracts';
+import {
+  ERROR_CODES,
+  type ErrorCode,
+  type FieldError,
+  type InvoiceIssueRefusal,
+} from '@hixaa/contracts';
 
 /**
  * Domain error hierarchy.
@@ -16,6 +21,13 @@ export abstract class DomainError extends Error {
   readonly fieldErrors?: FieldError[];
   /** Logged, never serialised to the client. */
   readonly context?: Record<string, unknown>;
+  /**
+   * Machine-readable detail the caller MAY see, surfaced as `extensions`.
+   *
+   * Subclasses opt in explicitly. Nothing lands here by accident, which is why
+   * `context` can stay a free-for-all for logging.
+   */
+  readonly publicExtensions?: Record<string, unknown>;
 
   constructor(message: string, options?: { fieldErrors?: FieldError[]; context?: Record<string, unknown> }) {
     super(message);
@@ -179,12 +191,44 @@ export class ImmutableRecordError extends DomainError {
   }
 }
 
+/**
+ * An invoice issue was refused by one of the gates in docs/23 §5.1.
+ *
+ * Distinct from a plain `ValidationError` because the caller did nothing wrong:
+ * the request is well-formed and the DOCUMENT is not yet fit to become a legal
+ * instrument. `refusal` names which gate, so the frontend can route the user to
+ * the screen that fixes it rather than showing prose and hoping.
+ */
+export class InvoiceIssueRefusedError extends DomainError {
+  readonly code = ERROR_CODES.INVOICE_ISSUE_REFUSED;
+  readonly status = 422;
+  override readonly publicExtensions: Record<string, unknown>;
+
+  constructor(
+    readonly refusal: InvoiceIssueRefusal,
+    message: string,
+    context?: Record<string, unknown>,
+  ) {
+    super(message, { context: { refusal, ...context } });
+    // The gate that fired is the whole point of this error type — without it
+    // the caller has prose and has to guess which screen fixes the problem.
+    this.publicExtensions = { refusal };
+  }
+}
+
 export class SelfApprovalError extends DomainError {
   readonly code = ERROR_CODES.SELF_APPROVAL_FORBIDDEN;
   readonly status = 403;
 
-  constructor(entity: string) {
-    super(`You cannot approve a ${entity} you created.`);
+  /**
+   * `action` and `origin` are parameterised because the same control guards two
+   * different acts with different vocabulary: an order is APPROVED by someone
+   * who did not CREATE it, and a payment is VERIFIED by someone who did not
+   * RECORD it. Hardcoding "approve/created" produced "You cannot approve a
+   * payment you recorded you created" the first time this was reused.
+   */
+  constructor(entity: string, action = 'approve', origin = 'created') {
+    super(`You cannot ${action} a ${entity} you ${origin}.`);
   }
 }
 
