@@ -162,6 +162,7 @@ model User {
   emailVerificationToken EmailVerificationToken[]
   teamMemberships        TeamMember[]
   managedTeams           Team[]                    @relation("TeamManager")
+  managedTerritories     Territory[]               @relation("TerritoryManager")
   auditLogs              AuditLog[]
   notifications          Notification[]
   notificationPrefs      NotificationPreference[]
@@ -672,4 +673,225 @@ model FeatureFlag {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("feature_flag")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// GEOGRAPHY & TERRITORIES  (Phase 3)
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum TerritoryType {
+  ZONE
+  REGION
+  STATE
+  DISTRICT
+}
+
+model Country {
+  id       String @id @default(uuid(7)) @db.Uuid
+  /// ISO 3166-1 alpha-2.
+  code     String @unique
+  name     String
+  dialCode String @map("dial_code")
+  currency String
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  states State[]
+
+  @@map("country")
+}
+
+/// The GST state code is the single most operationally important field in this
+/// context: it is the input to the place-of-supply rule that decides whether a
+/// line is taxed CGST+SGST or IGST. A wrong value produces legally defective
+/// invoices. See docs/02-data-model.md §7.
+model State {
+  id           String @id @default(uuid(7)) @db.Uuid
+  countryId    String @map("country_id") @db.Uuid
+  name         String
+  /// Postal abbreviation, e.g. MH.
+  code         String
+  /// Two-digit GST code, e.g. 27. Matches GSTIN characters 1–2.
+  gstStateCode String @unique @map("gst_state_code")
+  /// Union territories are taxed with UTGST rather than SGST.
+  isUnionTerritory Boolean @default(false) @map("is_union_territory")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  country    Country     @relation(fields: [countryId], references: [id])
+  cities     City[]
+  addresses  Address[]
+  territories Territory[]
+
+  @@unique([countryId, code])
+  @@index([countryId, isActive])
+  @@map("state")
+}
+
+model City {
+  id      String @id @default(uuid(7)) @db.Uuid
+  stateId String @map("state_id") @db.Uuid
+  name    String
+  /// Optional default PIN, useful for address autocomplete.
+  pincode String?
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  state     State     @relation(fields: [stateId], references: [id])
+  addresses Address[]
+
+  @@unique([stateId, name])
+  @@index([stateId, isActive])
+  @@map("city")
+}
+
+/// Referenced by FK from its owners (warehouse, distributor, customer) rather
+/// than being polymorphic — a real foreign key is enforceable and joinable;
+/// an entityType/entityId pair is neither.
+model Address {
+  id      String  @id @default(uuid(7)) @db.Uuid
+  label   String?
+  line1   String
+  line2   String?
+  landmark String?
+
+  cityId     String? @map("city_id") @db.Uuid
+  cityName   String  @map("city_name")
+  stateId    String  @map("state_id") @db.Uuid
+  postalCode String  @map("postal_code")
+  countryCode String @default("IN") @map("country_code")
+
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+
+  contactName  String? @map("contact_name")
+  contactPhone String? @map("contact_phone")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  state State @relation(fields: [stateId], references: [id])
+  city  City? @relation(fields: [cityId], references: [id])
+
+  warehouses Warehouse[]
+
+  @@index([stateId])
+  @@index([postalCode])
+  @@index([deletedAt])
+  @@map("address")
+}
+
+/// Sales geography, as a tree: Zone → Region → State → District.
+///
+/// This is the FIRST scoped entity. Registering it in SCOPE_REGISTRY is what
+/// makes the Prisma scope extension start filtering real rows — see ADR-0003.
+model Territory {
+  id       String        @id @default(uuid(7)) @db.Uuid
+  code     String        @unique
+  name     String
+  type     TerritoryType @default(REGION)
+  parentId String?       @map("parent_id") @db.Uuid
+
+  /// Materialised path of ancestor ids, e.g. `.<zoneId>.<regionId>.`.
+  ///
+  /// Turns "everything under the West zone" into one indexed LIKE instead of a
+  /// recursive CTE per request. Leading and trailing dots make `LIKE '%.<id>.%'`
+  /// unambiguous — without them, one id could prefix-match another.
+  path  String @default("")
+  depth Int    @default(0)
+
+  /// Optional link to a State, so a STATE-type territory inherits its GST code.
+  stateId String? @map("state_id") @db.Uuid
+
+  managerId   String? @map("manager_id") @db.Uuid
+  description String?
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+  updatedById String?   @map("updated_by_id") @db.Uuid
+
+  parent   Territory?  @relation("TerritoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Territory[] @relation("TerritoryTree")
+  state    State?      @relation(fields: [stateId], references: [id])
+  manager  User?       @relation("TerritoryManager", fields: [managerId], references: [id], onDelete: SetNull)
+
+  warehouses Warehouse[]
+
+  @@index([parentId])
+  @@index([path])
+  @@index([type, isActive])
+  @@index([managerId])
+  @@index([deletedAt])
+  @@map("territory")
+}
+
+enum WarehouseType {
+  COMPANY
+  DISTRIBUTOR
+  TRANSIT
+  SCRAP
+}
+
+/// Introduced here because a warehouse is a location, and locations belong with
+/// geography. The stock LEDGER that gives it meaning arrives in Phase 6.
+model Warehouse {
+  id   String        @id @default(uuid(7)) @db.Uuid
+  code String        @unique
+  name String
+  type WarehouseType @default(COMPANY)
+
+  addressId   String? @map("address_id") @db.Uuid
+  territoryId String? @map("territory_id") @db.Uuid
+
+  /// Set when type = DISTRIBUTOR. The FK arrives with the Distributor model in
+  /// Phase 5; kept as a plain column now so no migration is needed then.
+  distributorId String? @map("distributor_id") @db.Uuid
+
+  isDefault Boolean @default(false) @map("is_default")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+
+  address   Address?   @relation(fields: [addressId], references: [id])
+  territory Territory? @relation(fields: [territoryId], references: [id])
+
+  @@index([type, isActive])
+  @@index([territoryId])
+  @@index([distributorId])
+  @@index([deletedAt])
+  @@map("warehouse")
+}
+
+/// Industries Hixaa serves — thermal power, coal, mining, cement, rail
+/// simulation. Promoted from a SystemSetting JSON blob to real rows now that
+/// customers (Phase 7) will reference them by FK.
+model Industry {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  slug        String  @unique
+  name        String
+  description String?
+  sortOrder   Int     @default(0) @map("sort_order")
+  isActive    Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("industry")
 }

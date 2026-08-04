@@ -197,7 +197,7 @@ export class RolesService {
     }
 
     await this.prisma.transaction(async (tx) => {
-      await tx.role.delete({ where: { id } });
+      await tx.role.softDelete({ id });
       await this.audit.record(tx, {
         category: 'SECURITY',
         action: 'role.deleted',
