@@ -78,6 +78,19 @@ export const idempotencyKeySchema = z
 /** Wraps a single resource: `{ data: T }`. */
 export const dataEnvelope = <T extends z.ZodTypeAny>(schema: T) => z.object({ data: schema });
 
+/**
+ * Masks all but the last few characters — bank accounts, card numbers.
+ *
+ * Lives in contracts rather than in either app because the API masks on write
+ * (so a full account number never leaves the server) and the web masks on
+ * display. One rule, so the two cannot disagree about how much is revealed.
+ */
+export function maskTailValue(value: string | null | undefined, visible = 4): string | null {
+  if (!value) return null;
+  if (value.length <= visible) return '•'.repeat(value.length);
+  return `${'•'.repeat(Math.min(8, value.length - visible))}${value.slice(-visible)}`;
+}
+
 /** Standard audit fields present on every business entity response. */
 export const auditFieldsSchema = z.object({
   createdAt: dateTimeSchema,

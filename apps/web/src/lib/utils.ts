@@ -109,12 +109,9 @@ export function initials(name: string): string {
     .join('');
 }
 
-/** Masks all but the last four digits — bank accounts, card numbers. */
-export function maskTail(value: string | null | undefined, visible = 4): string {
-  if (!value) return '—';
-  if (value.length <= visible) return value;
-  return `${'•'.repeat(Math.min(8, value.length - visible))}${value.slice(-visible)}`;
-}
+// maskTail now lives in @hixaa/contracts so the API (masking on write) and the
+// web (masking on display) cannot disagree about how much is revealed.
+export { maskTailValue as maskTail } from '@hixaa/contracts';
 
 /** ENUM_VALUE → "Enum value" for display. */
 export function humanizeEnum(value: string | null | undefined): string {

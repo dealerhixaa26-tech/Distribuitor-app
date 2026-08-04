@@ -52,7 +52,6 @@ const NAV_SECTIONS: Array<{ heading: string; items: NavItem[] }> = [
         href: '/distributors',
         icon: Building2,
         permission: PERMISSIONS.DISTRIBUTOR_READ,
-        phase: 5,
       },
       {
         label: 'Customers',

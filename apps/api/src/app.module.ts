@@ -15,6 +15,7 @@ import { QueueModule } from './infrastructure/queue/queue.module';
 import { StorageModule } from './infrastructure/storage/storage.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { DistributorsModule } from './modules/distributors/distributors.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { HealthModule } from './modules/health/health.module';
 import { RolesModule } from './modules/roles/roles.module';
@@ -63,6 +64,7 @@ import { UsersModule } from './modules/users/users.module';
     TerritoriesModule,
     SettingsModule,
     DocumentsModule,
+    DistributorsModule,
     AuditModule,
     HealthModule,
   ],
