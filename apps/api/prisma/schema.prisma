@@ -573,6 +573,7 @@ model Document {
   links      DocumentLink[]
   kycRecords DistributorDocument[]
   agreements Agreement[]
+  productMedia ProductMedia[]
 
   @@index([checksumSha256])
   @@index([scanStatus])
@@ -955,9 +956,10 @@ model Distributor {
   territoryId      String? @map("territory_id") @db.Uuid
   accountManagerId String? @map("account_manager_id") @db.Uuid
 
-  /// Assigned price list. Deliberately a plain column with no FK: PriceList
-  /// arrives in Phase 4, and adding the constraint then is a one-line
-  /// migration rather than a schema reshuffle.
+  /// Assigned price list. Phase 5 left this as a plain column because PriceList
+  /// did not exist yet; Phase 4 closed the seam and it is now a real FK.
+  /// `onDelete: Restrict` — a list with partners on it cannot be deleted out
+  /// from under them, which would silently reprice every future order.
   priceListId String? @map("price_list_id") @db.Uuid
 
   billingAddressId  String? @map("billing_address_id") @db.Uuid
@@ -1002,12 +1004,17 @@ model Distributor {
   billingAddress  Address?  @relation("DistributorBilling", fields: [billingAddressId], references: [id])
   shippingAddress Address?  @relation("DistributorShipping", fields: [shippingAddressId], references: [id])
 
+  priceList PriceList? @relation(fields: [priceListId], references: [id], onDelete: Restrict)
+
   contacts  DistributorContact[]
   documents DistributorDocument[]
   notes     DistributorNote[]
   agreements Agreement[]
+  /// The authorized catalog — which products this partner may buy (Phase 4).
+  authorizedProducts DistributorProduct[]
 
   @@index([status, territoryId])
+  @@index([priceListId])
   @@index([accountManagerId])
   @@index([territoryId])
   @@index([createdAt(sort: Desc), id(sort: Desc)])
@@ -1105,4 +1112,550 @@ model Agreement {
   @@index([distributorId, status])
   @@index([endDate])
   @@map("agreement")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CATALOG & PRICING (Phase 4)
+//
+// Shaped by the single most important domain fact: Hixaa sells SYSTEMS, not
+// SKUs. A Raksha IoT deployment is gateways + tags + a licence + commissioning,
+// and commissioning is a SERVICE carrying a SAC code on the same invoice as the
+// goods. Hence four product types, a bill of materials, specifications as rows,
+// and HSN alongside SAC. See docs/00-domain-and-scope.md §1.1 and docs/17.
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum ProductType {
+  GOODS
+  SERVICE
+  KIT
+  CONFIGURABLE
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  DISCONTINUED
+  ARCHIVED
+}
+
+enum ProductMediaType {
+  IMAGE
+  BROCHURE
+  DATASHEET
+  MANUAL
+  CERTIFICATE
+  VIDEO
+  CAD
+}
+
+enum PriceListStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/// Whether a list's prices include tax. Stored explicitly rather than assumed:
+/// a column of numbers carries no memory of which convention produced it.
+/// Hixaa quotes ex-GST — see ADR-0008.
+enum PriceBasis {
+  EXCLUSIVE
+  INCLUSIVE
+}
+
+enum DiscountScope {
+  GLOBAL
+  PRICE_LIST
+  DISTRIBUTOR
+  CATEGORY
+  PRODUCT
+}
+
+enum DiscountType {
+  PERCENT
+  FLAT
+}
+
+/// Unit of measure, carrying the GST-mandated **UQC** code.
+///
+/// A separate table rather than a free-text column because UQC is validated when
+/// GSTR-1 is filed: "pieces" is rejected where `NOS` is required, and finding
+/// that out at filing time means re-issuing invoices.
+model UnitOfMeasure {
+  id   String @id @default(uuid(7)) @db.Uuid
+  code String @unique
+  name String
+  /// The GST Unit Quantity Code — NOS, SET, MTR, KGS, HRS…
+  uqc  String
+  /// Decimal places allowed. 0 for NOS: half a gateway is not a thing.
+  precision Int     @default(0)
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  products Product[]
+
+  @@index([isActive])
+  @@map("unit_of_measure")
+}
+
+/// Hixaa's own brand plus the OEM brands it integrates and resells.
+model Brand {
+  id   String @id @default(uuid(7)) @db.Uuid
+  code String @unique
+  name String
+  slug String @unique
+
+  description String?
+  website     String?
+  logoDocumentId String? @map("logo_document_id") @db.Uuid
+  isActive    Boolean @default(true) @map("is_active")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  products Product[]
+
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("brand")
+}
+
+/// Nested product categories, seeded from the company's published service lines.
+///
+/// Uses the SAME materialised-path scheme as Territory, and the same helpers in
+/// `modules/territories/territory-path.ts` — a second tree does not need a
+/// second implementation, and sharing the code means the cycle guard and the
+/// subtree rewrite are already proven.
+model Category {
+  id       String  @id @default(uuid(7)) @db.Uuid
+  code     String  @unique
+  name     String
+  slug     String  @unique
+  parentId String? @map("parent_id") @db.Uuid
+
+  /// `.<ancestorId>.<selfId>.` — leading and trailing dots are load-bearing.
+  path  String @default("")
+  depth Int    @default(0)
+
+  description String?
+  /// Display order among siblings.
+  sortOrder   Int     @default(0) @map("sort_order")
+  imageDocumentId String? @map("image_document_id") @db.Uuid
+  isActive    Boolean @default(true) @map("is_active")
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+  updatedById String?   @map("updated_by_id") @db.Uuid
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@index([parentId])
+  @@index([path])
+  @@index([isActive, sortOrder])
+  @@index([deletedAt])
+  @@map("category")
+}
+
+/// The catalog's central entity.
+model Product {
+  id     String        @id @default(uuid(7)) @db.Uuid
+  sku    String        @unique
+  name   String
+  slug   String        @unique
+  type   ProductType   @default(GOODS)
+  status ProductStatus @default(DRAFT)
+
+  categoryId String? @map("category_id") @db.Uuid
+  brandId    String? @map("brand_id") @db.Uuid
+  uomId      String? @map("uom_id") @db.Uuid
+
+  shortDescription String? @map("short_description")
+  description      String?
+
+  // ── Tax classification ──────────────────────────────────────────────────
+  /// HSN classifies GOODS, SAC classifies SERVICES. A product carries exactly
+  /// one — enforced by a CHECK constraint in migration 0006, because a service
+  /// invoiced under an HSN code is a filing defect.
+  hsnCode String? @map("hsn_code")
+  sacCode String? @map("sac_code")
+  /// Denormalised snapshot for list display ONLY. `tax_rate` is authoritative —
+  /// it is date-effective, and this column is not. See ADR-0008 §2.
+  gstRate Decimal @default(18) @map("gst_rate") @db.Decimal(5, 2)
+
+  // ── Physical and commercial attributes ──────────────────────────────────
+  /// An IoT safety device in a confined space is a warranty and liability
+  /// object: we must be able to say which serial went where. Drives the serial
+  /// ledger in Phase 6.
+  isSerialized   Boolean @default(false) @map("is_serialized")
+  isBatchTracked Boolean @default(false) @map("is_batch_tracked")
+  isReturnable   Boolean @default(true) @map("is_returnable")
+  isPurchasable  Boolean @default(true) @map("is_purchasable")
+  isSellable     Boolean @default(true) @map("is_sellable")
+
+  warrantyMonths Int?     @map("warranty_months")
+  leadTimeDays   Int?     @map("lead_time_days")
+  minOrderQty    Decimal  @default(1) @map("min_order_qty") @db.Decimal(18, 4)
+  weightGrams    Decimal? @map("weight_grams") @db.Decimal(18, 4)
+
+  tags String[]
+
+  /// Postgres-generated tsvector over name, SKU, description and tags, with a
+  /// GIN index. Generated columns are not expressible in Prisma, so it is
+  /// declared Unsupported here and created in migration 0006 — which also means
+  /// Prisma never tries to write it, which is exactly right.
+  searchVector Unsupported("tsvector")? @map("search_vector")
+
+  /// Incremented on every commercially significant change; a quotation issued
+  /// against revision 3 stays explicable after revision 4 lands.
+  revision Int @default(1)
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+  updatedById String?   @map("updated_by_id") @db.Uuid
+
+  category Category?      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  brand    Brand?         @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  uom      UnitOfMeasure? @relation(fields: [uomId], references: [id], onDelete: Restrict)
+
+  variants       ProductVariant[]
+  specifications ProductSpecification[]
+  media          ProductMedia[]
+  revisions      ProductRevision[]
+  /// This product's own components…
+  bomComponents  ProductBom[]         @relation("BomParent")
+  /// …and the assemblies this product is a component of.
+  bomUsedIn      ProductBom[]         @relation("BomComponent")
+  priceListItems PriceListItem[]
+  authorizedFor  DistributorProduct[]
+
+  @@index([categoryId, status])
+  @@index([brandId])
+  @@index([type, status])
+  @@index([status, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([hsnCode])
+  @@index([sacCode])
+  @@index([deletedAt])
+  @@map("product")
+}
+
+/// A concrete sellable configuration of a CONFIGURABLE product.
+model ProductVariant {
+  id        String @id @default(uuid(7)) @db.Uuid
+  productId String @map("product_id") @db.Uuid
+  sku       String @unique
+  name      String
+
+  /// The distinguishing attributes, e.g. `{ "range": "50 workers" }`. JSON is
+  /// right here (unlike specifications): these are identity, not filter targets.
+  attributes Json @default("{}")
+
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceListItems PriceListItem[]
+
+  @@index([productId, isActive])
+  @@index([deletedAt])
+  @@map("product_variant")
+}
+
+/// Technical specifications as ROWS, not a JSON blob.
+///
+/// Industrial buyers filter on specifications — "DAQ modules with 24 V DC
+/// supply" is a real query this catalog must answer. JSON cannot be indexed for
+/// that anywhere near as cheaply. See docs/02-data-model.md §4.
+model ProductSpecification {
+  id        String @id @default(uuid(7)) @db.Uuid
+  productId String @map("product_id") @db.Uuid
+
+  /// Groups specs on the datasheet: "Electrical", "Environmental", "Physical".
+  groupName String? @map("group_name")
+  name      String
+  value     String
+  unit      String?
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, sortOrder])
+  @@index([name, value])
+  @@map("product_specification")
+}
+
+/// Links a product to an already-uploaded Document. Deliberately does not
+/// re-implement upload, scanning, or storage — DocumentsService owns all three.
+model ProductMedia {
+  id         String           @id @default(uuid(7)) @db.Uuid
+  productId  String           @map("product_id") @db.Uuid
+  documentId String           @map("document_id") @db.Uuid
+  type       ProductMediaType @default(IMAGE)
+
+  title     String?
+  isPrimary Boolean @default(false) @map("is_primary")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@unique([productId, documentId, type])
+  @@index([productId, type, sortOrder])
+  @@map("product_media")
+}
+
+/// Bill of materials — what a KIT explodes into.
+///
+/// This is what makes "Raksha IoT — 50-Worker Deployment" one sellable line that
+/// resolves to gateways, wearable tags, a server licence, and commissioning.
+model ProductBom {
+  id                 String @id @default(uuid(7)) @db.Uuid
+  parentProductId    String @map("parent_product_id") @db.Uuid
+  componentProductId String @map("component_product_id") @db.Uuid
+
+  quantity   Decimal @db.Decimal(18, 4)
+  /// Optional components appear in the explosion but priced at zero unless
+  /// selected — how "add a spare gateway" is modelled without a second SKU.
+  isOptional Boolean @default(false) @map("is_optional")
+  sortOrder  Int     @default(0) @map("sort_order")
+  notes      String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  parent    Product @relation("BomParent", fields: [parentProductId], references: [id], onDelete: Cascade)
+  component Product @relation("BomComponent", fields: [componentProductId], references: [id], onDelete: Restrict)
+
+  /// A component appears at most once per parent; change the quantity instead.
+  @@unique([parentProductId, componentProductId])
+  @@index([componentProductId])
+  @@map("product_bom")
+}
+
+/// Append-only snapshot of a product's commercially significant fields.
+///
+/// Never updated, never deleted — hence no `deletedAt`, the same reasoning that
+/// keeps invoices out of the soft-delete extension.
+model ProductRevision {
+  id        String @id @default(uuid(7)) @db.Uuid
+  productId String @map("product_id") @db.Uuid
+  revision  Int
+
+  /// The full before-image at the moment of change.
+  snapshot  Json
+  changedBy String? @map("changed_by") @db.Uuid
+  reason    String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, revision])
+  @@index([productId, createdAt(sort: Desc)])
+  @@map("product_revision")
+}
+
+/// A named, date-effective set of prices assigned to distributors.
+///
+/// Versioned by CLONING rather than editing: republishing a live list would
+/// silently reprice every order still being negotiated against it.
+model PriceList {
+  id     String          @id @default(uuid(7)) @db.Uuid
+  code   String          @unique
+  name   String
+  status PriceListStatus @default(DRAFT)
+
+  currency  String     @default("INR") @db.Char(3)
+  /// ADR-0008: Hixaa quotes ex-GST. Stored, not assumed.
+  priceBasis PriceBasis @default(EXCLUSIVE) @map("price_basis")
+
+  validFrom DateTime  @map("valid_from") @db.Date
+  validTo   DateTime? @map("valid_to") @db.Date
+
+  /// Exactly one list may be the default, enforced by a PARTIAL unique index in
+  /// migration 0006 — a plain unique would allow only one `false` row.
+  isDefault Boolean @default(false) @map("is_default")
+
+  version      Int     @default(1)
+  clonedFromId String? @map("cloned_from_id") @db.Uuid
+  description  String?
+
+  publishedAt DateTime? @map("published_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+  updatedById String?   @map("updated_by_id") @db.Uuid
+
+  clonedFrom PriceList?  @relation("PriceListVersions", fields: [clonedFromId], references: [id], onDelete: SetNull)
+  clones     PriceList[] @relation("PriceListVersions")
+
+  items               PriceListItem[]
+  distributors        Distributor[]
+  customFor           DistributorProduct[]
+
+  @@index([status, validFrom])
+  @@index([deletedAt])
+  @@map("price_list")
+}
+
+/// One price point. The `minQty` column IS the volume slab: rows at 1 / 10 / 50
+/// for one product are three slabs, and resolution takes the highest `minQty`
+/// that does not exceed the ordered quantity.
+model PriceListItem {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  priceListId String  @map("price_list_id") @db.Uuid
+  productId   String  @map("product_id") @db.Uuid
+  variantId   String? @map("variant_id") @db.Uuid
+
+  /// Lower bound of the slab, inclusive.
+  minQty Decimal @default(1) @map("min_qty") @db.Decimal(18, 4)
+  /// GST-EXCLUSIVE unit price. See ADR-0008.
+  price  Decimal @db.Decimal(18, 4)
+
+  /// Floor below which the pricing engine flags an override as needing
+  /// approval, independent of the caller's role ceiling. Null means no floor.
+  minPrice Decimal? @map("min_price") @db.Decimal(18, 4)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  priceList PriceList       @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  /// Uniqueness is enforced by two PARTIAL indexes in migration 0006 rather than
+  /// here: Postgres treats NULLs as distinct, so a plain unique on a nullable
+  /// `variant_id` would happily accept duplicate product-level slabs.
+  @@index([priceListId, productId, minQty(sort: Desc)])
+  @@index([productId])
+  @@map("price_list_item")
+}
+
+/// A discount that may apply to a line. Rules do NOT stack — the highest
+/// priority wins and the rest are reported as considered-and-rejected. See
+/// ADR-0007 §3 for why.
+model DiscountRule {
+  id     String        @id @default(uuid(7)) @db.Uuid
+  code   String        @unique
+  name   String
+  scope  DiscountScope @default(GLOBAL)
+
+  /// The scoped entity's id — a product, category, distributor, or price list.
+  /// Polymorphic, so no FK is possible; the service validates existence against
+  /// the scope on write, which is where the type is actually known.
+  targetId String? @map("target_id") @db.Uuid
+
+  type  DiscountType @default(PERCENT)
+  /// A percentage (0–100) when type is PERCENT, else an absolute amount.
+  value Decimal      @db.Decimal(18, 4)
+
+  minQty    Decimal? @map("min_qty") @db.Decimal(18, 4)
+  minAmount Decimal? @map("min_amount") @db.Decimal(18, 4)
+  /// Caps a PERCENT discount in absolute terms. Null means uncapped.
+  maxDiscountAmount Decimal? @map("max_discount_amount") @db.Decimal(18, 4)
+
+  /// Lower number wins. Ties break on scope specificity (PRODUCT first).
+  priority Int @default(100)
+
+  validFrom DateTime  @map("valid_from") @db.Date
+  validTo   DateTime? @map("valid_to") @db.Date
+  isActive  Boolean   @default(true) @map("is_active")
+
+  description String?
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+  updatedById String?   @map("updated_by_id") @db.Uuid
+
+  @@index([isActive, scope, targetId])
+  @@index([validFrom, validTo])
+  @@index([deletedAt])
+  @@map("discount_rule")
+}
+
+/// Date-effective GST rates by HSN/SAC. A rate change is an INSERT; historical
+/// invoices resolve the rate in force on their own document date and stay
+/// permanently reproducible. See ADR-0008 §2.
+model TaxRate {
+  id         String @id @default(uuid(7)) @db.Uuid
+  hsnSacCode String @map("hsn_sac_code")
+
+  /// Total GST percentage. The CGST/SGST split is derived (half each) rather
+  /// than stored, because the split is a property of the TRANSACTION's
+  /// geography, not of the rate.
+  gstRate  Decimal @map("gst_rate") @db.Decimal(5, 2)
+  cessRate Decimal @default(0) @map("cess_rate") @db.Decimal(5, 2)
+
+  description String?
+
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById String?  @map("created_by_id") @db.Uuid
+
+  /// One rate per code per start date. Superseding means inserting a new row
+  /// and closing the old one's `effectiveTo`, never editing.
+  @@unique([hsnSacCode, effectiveFrom])
+  @@index([hsnSacCode, effectiveFrom(sort: Desc)])
+  @@map("tax_rate")
+}
+
+/// The authorized catalog — which products a distributor may buy.
+///
+/// Closes the second seam Phase 5 left open. This is the ONLY Phase 4 model
+/// that is scope-sensitive: it is registered in SCOPE_REGISTRY as
+/// `viaDistributor()`, so a territory-scoped user cannot read or write the
+/// commercial terms of a partner outside their subtree. The rest of the catalog
+/// is company-wide reference data and is deliberately unscoped.
+model DistributorProduct {
+  id            String @id @default(uuid(7)) @db.Uuid
+  distributorId String @map("distributor_id") @db.Uuid
+  productId     String @map("product_id") @db.Uuid
+
+  /// Overrides the distributor's assigned list for this product alone — the
+  /// bespoke-terms escape hatch, without cloning a whole list for one SKU.
+  customPriceListId String? @map("custom_price_list_id") @db.Uuid
+
+  isActive      Boolean  @default(true) @map("is_active")
+  authorizedAt  DateTime @default(now()) @map("authorized_at") @db.Timestamptz(3)
+  /// Ceiling on how much of this product the partner may order at once. Null
+  /// means unlimited. Enforced by the order module in Phase 7.
+  maxOrderQty   Decimal? @map("max_order_qty") @db.Decimal(18, 4)
+  notes         String?
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+
+  distributor     Distributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
+  product         Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  customPriceList PriceList?  @relation(fields: [customPriceListId], references: [id], onDelete: SetNull)
+
+  @@unique([distributorId, productId])
+  @@index([distributorId, isActive])
+  @@index([productId])
+  @@index([deletedAt])
+  @@map("distributor_product")
 }

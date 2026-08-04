@@ -3,6 +3,7 @@ import { financialYearOf, ROLE_KEYS } from '@hixaa/contracts';
 import { PrismaClient } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { config as loadEnv } from 'dotenv';
+import { seedCatalog } from './catalog.seed';
 import { seedGeography, seedIndustries, seedTerritories } from './geography.seed';
 import { seedPermissions, seedRoles } from './permissions.seed';
 import { seedPortfolio } from './portfolio.seed';
@@ -41,6 +42,9 @@ async function main(): Promise<void> {
 
   console.log('\n› Company profile & portfolio');
   await seedPortfolio(prisma);
+
+  console.log('\n› Catalog (categories, products, prices, tax rates)');
+  await seedCatalog(prisma);
 
   console.log('\n› Number sequences');
   await seedNumberSequences();

@@ -3,7 +3,12 @@ import { cn } from '@/lib/utils';
 
 export interface PageHeaderProps {
   title: string;
-  description?: string;
+  /**
+   * ReactNode rather than string: a detail page's subtitle legitimately carries
+   * a status badge and a code alongside its prose. Rendered inside a <p>, so
+   * keep it to inline content.
+   */
+  description?: ReactNode;
   actions?: ReactNode;
   breadcrumbs?: Array<{ label: string; href?: string }>;
   className?: string;

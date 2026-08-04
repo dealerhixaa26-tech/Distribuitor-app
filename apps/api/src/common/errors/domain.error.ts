@@ -138,6 +138,38 @@ export class CreditLimitExceededError extends DomainError {
   }
 }
 
+/**
+ * No price could be resolved for a product.
+ *
+ * Deliberately an ERROR rather than a zero. A silently zero-priced line on a
+ * tax invoice is a legal document giving goods away, and it is precisely the
+ * bug that ships because only the happy path was tested. See ADR-0007 §5.
+ */
+export class PriceNotFoundError extends DomainError {
+  readonly code = ERROR_CODES.PRICE_NOT_FOUND;
+  readonly status = 409;
+
+  constructor(sku: string, priceListCode: string, quantity: string) {
+    super(
+      `No price for "${sku}" in price list ${priceListCode} at quantity ${quantity}. ` +
+        'Add a price-list entry before quoting this product.',
+      { context: { sku, priceListCode, quantity } },
+    );
+  }
+}
+
+export class ProductNotAuthorizedError extends DomainError {
+  readonly code = ERROR_CODES.PRODUCT_NOT_AUTHORIZED;
+  readonly status = 409;
+
+  constructor(sku: string, distributorCode: string) {
+    super(
+      `"${sku}" is not in ${distributorCode}'s authorized catalog.`,
+      { context: { sku, distributorCode } },
+    );
+  }
+}
+
 export class ImmutableRecordError extends DomainError {
   readonly code = ERROR_CODES.INVOICE_IMMUTABLE;
   readonly status = 409;

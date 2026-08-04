@@ -104,6 +104,17 @@ export const SCOPE_REGISTRY: Readonly<Record<string, ScopeStrategy>> = {
   // match against the caller's already-expanded subtree.
   distributor: byTerritory(),
 
+  // ── Phase 4 — live ──
+  // The authorized catalog reaches a territory only through its distributor, so
+  // it is scoped via the relation rather than by a column it does not have.
+  //
+  // This is the ONLY catalog model registered here, and deliberately so:
+  // products, categories, price lists, discount rules, and tax rates are
+  // company-wide reference data. Scoping them would make the catalog invisible
+  // to every non-global user; NOT scoping this one would leak one partner's
+  // commercial terms to a manager in another territory.
+  distributorProduct: viaDistributor(),
+
   // ── Phase 7 ──
   // order:       viaDistributor(),
   // quotation:   viaDistributor(),

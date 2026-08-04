@@ -13,6 +13,7 @@ import {
   Settings,
   ShieldCheck,
   ShoppingCart,
+  Tags,
   Users,
   Warehouse,
 } from 'lucide-react';
@@ -76,7 +77,12 @@ const NAV_SECTIONS: Array<{ heading: string; items: NavItem[] }> = [
         href: '/products',
         icon: Package,
         permission: PERMISSIONS.PRODUCT_READ,
-        phase: 4,
+      },
+      {
+        label: 'Price lists',
+        href: '/price-lists',
+        icon: Tags,
+        permission: PERMISSIONS.PRICELIST_READ,
       },
       {
         label: 'Inventory',

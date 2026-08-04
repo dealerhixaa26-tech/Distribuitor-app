@@ -25,3 +25,6 @@ export * from './auth/user.schema';
 export * from './master/geography.schema';
 export * from './master/settings.schema';
 export * from './channel/distributor.schema';
+export * from './catalog/category.schema';
+export * from './catalog/product.schema';
+export * from './catalog/pricing.schema';
