@@ -29,7 +29,7 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 |---|---|
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
-| **Branch** | `main` — clean, pushed, at `7cf5393` |
+| **Branch** | `main` — clean, pushed, at `5ee3d82` |
 | **Size** | ~38,400 source lines · 70 tables · 9 migrations · ~205 endpoints · 295 tests |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
 
@@ -40,11 +40,16 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | 1 — Foundation | ✅ Complete — `docs/13-phase-1-completion.md` |
 | 2 — Identity & Access | ✅ Complete — `docs/14-phase-2-completion.md` |
 | 3 — Master Data | ✅ Complete — `docs/15-phase-3-progress.md` |
-| 4 — Catalog & Pricing | ✅ Complete — `docs/18-phase-4-completion.md` |
-| 6 — Inventory | ✅ Complete — `docs/20-phase-6-completion.md` |
-| 7 — Sales | ✅ Complete — `docs/22-phase-7-completion.md` |
+| 4 — Catalog & Pricing | ✅ Complete — `docs/17-phase-4-design.md` · `docs/18-phase-4-completion.md` |
 | 5 — Distributors | ✅ Complete — `docs/16-phase-5-completion.md` |
-| 6–11 | Not started — see `docs/05-roadmap.md` |
+| 6 — Inventory | ✅ Complete — `docs/19-phase-6-design.md` · `docs/20-phase-6-completion.md` |
+| 7 — Sales | ✅ Complete — `docs/21-phase-7-design.md` · `docs/22-phase-7-completion.md` |
+| **8 — Finance** | ❌ **NOT STARTED — the critical path.** Blocked on E1 and E2 |
+| 9 — Reporting | ❌ Not started |
+| 10 — Integrations | ❌ Not started |
+| 11 — Deployment | ❌ Not started |
+
+Phases were built 1→2→3→5→4→6→7: Phase 4 was skipped at the owner's request and picked up after 5.
 
 **Phase 8 (Finance) is now the critical path** — invoicing, payments, GST returns. **Every seam
 in the schema is now closed**; `StockReservation.orderId` was the last one.
@@ -213,7 +218,7 @@ packages/contracts   ⭐ Zod schemas — the single source of truth for every DT
                         OpenAPI, React Hook Form, and both apps' types.
 ```
 
-Six ADRs in `docs/adr/`. The ones that constrain daily work:
+Fourteen ADRs in `docs/adr/`. The ones that constrain daily work:
 
 - **0002** Inventory will be a ledger + derived balance, never a mutable counter.
 - **0003** Authorization is scoped at the **repository** layer via a Prisma extension, so
@@ -311,11 +316,19 @@ Still unanswered from `docs/12-recommendations.md` §E:
   `mfaEnabled`. TOTP itself is not implemented.
 - **Teams** — schema only, no CRUD.
 - **Bulk import** — `importDistributorRowSchema` defined and tested; no endpoint.
+- **Order amendment** — an approved order is frozen (ADR-0011); changing one is cancel-and-reraise
+  until there is a documented amendment policy.
+- **Backorder allocation is manual** — `POST /orders/:id/reserve` re-attempts it. Deliberate:
+  allocating scarce stock between waiting customers is a commercial judgement (ADR-0012 §4).
+- **Quotation email** — the outbox event fires on send; the worker's PDF-attachment handler is not
+  written, so nothing is actually delivered yet. `GET /quotations/:id/pdf` works.
 - **ClamAV and S3 drivers** — interfaces and state machines exist; both **throw at boot** if
   selected, rather than silently degrading.
 - **Google Sheets backup** — designed in `docs/07-integrations.md`, not built (Phase 10).
-- **Integration/E2E tests** — only unit tests exist (107). Testcontainers setup is specified
-  in `docs/09-testing-strategy.md` but not wired.
+- **Integration/E2E tests** — only unit tests exist (295: 142 contracts + 153 API). Every phase
+  has instead been verified by booting the API and driving it with `curl` against a real database,
+  which has repeatedly caught what unit tests could not. Testcontainers is specified in
+  `docs/09-testing-strategy.md` but still not wired — this is the largest testing gap.
 - **`/api/v1/*` route warning** on boot is a harmless Nest 11 / Express 5 deprecation.
 
 ---
