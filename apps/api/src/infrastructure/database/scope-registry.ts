@@ -99,8 +99,11 @@ export const SCOPE_REGISTRY: Readonly<Record<string, ScopeStrategy>> = {
   territory: territorySelf(),
   warehouse: byTerritory(),
 
-  // ── Phase 5 ──
-  // distributor: byTerritory(),
+  // ── Phase 5 — live ──
+  // A distributor belongs to one territory, so the boundary is a direct column
+  // match against the caller's already-expanded subtree.
+  distributor: byTerritory(),
+
   // ── Phase 7 ──
   // order:       viaDistributor(),
   // quotation:   viaDistributor(),

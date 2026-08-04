@@ -3,13 +3,12 @@
 **Hixaa Technologies Pvt. Ltd.** · Nagpur, Maharashtra
 An enterprise Distributor Management System, architected to grow into a full ERP/CRM platform.
 
-> **Current status: Phase 3 — Master Data. Complete and verified.**
-> Geography, territories, settings, and documents are live — and scoped RBAC now filters real
-> rows, not just endpoints. See [docs/15-phase-3-progress.md](docs/15-phase-3-progress.md) for
-> what was verified and the three latent bugs activating it exposed.
+> **Current status: Phases 1–3 and 5 complete and verified.**
+> Foundation, identity, master data, and the distributor channel are live. Scoped RBAC filters
+> real rows across two entities, proven by denial.
 >
-> Business modules (catalog, distributors, inventory, sales, finance) arrive in Phases 4–9 —
-> see the [roadmap](docs/05-roadmap.md).
+> **Phase 4 (Catalog & Pricing) is the gap** and is now the critical path — see
+> [docs/16-phase-5-completion.md](docs/16-phase-5-completion.md) §5–6.
 
 ---
 
@@ -51,7 +50,8 @@ Read in order for the full picture, or jump to what you need.
 | 12 | [**Recommendations**](docs/12-recommendations.md) | **What I recommend, the trade-offs, and what I need from you** |
 | 13 | [Phase 1 completion](docs/13-phase-1-completion.md) | Foundation: what was built and verified, deviations |
 | 14 | [Phase 2 completion](docs/14-phase-2-completion.md) | Identity & Access: verification, two bugs fixed |
-| 15 | [**Phase 3 completion**](docs/15-phase-3-progress.md) | **Master Data: scope activation and the three bugs it exposed** |
+| 15 | [Phase 3 completion](docs/15-phase-3-progress.md) | Master Data: scope activation and the three bugs it exposed |
+| 16 | [**Phase 5 completion**](docs/16-phase-5-completion.md) | **Distributors: KYC gate, credit control, second scoped entity** |
 
 ### Architecture Decision Records
 
@@ -123,9 +123,11 @@ After `pnpm db:seed`, the bootstrap administrator is the `SEED_SUPER_ADMIN_*` pa
 
 ## Next step
 
-**Phase 4 — Catalog & Pricing**: products with four types (goods, service, kit, configurable),
-bills of materials so a Raksha IoT deployment explodes into its components, technical
-specifications, versioned price lists with volume tiers, and the date-effective GST engine.
+**Phase 4 — Catalog & Pricing**, now the critical path: products with four types (goods,
+service, kit, configurable), bills of materials so a Raksha IoT deployment explodes into its
+components, technical specifications, versioned price lists with volume tiers, and the
+date-effective GST engine. It also closes the two seams Phase 5 left open — distributor price
+lists and the authorized product catalog.
 
 Outstanding answers from [docs/12-recommendations.md](docs/12-recommendations.md) §E — Hixaa's
 real GSTIN, the invoice number format your CA expects, the territory structure Hixaa actually

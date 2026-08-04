@@ -163,6 +163,8 @@ model User {
   teamMemberships        TeamMember[]
   managedTeams           Team[]                    @relation("TeamManager")
   managedTerritories     Territory[]               @relation("TerritoryManager")
+  managedDistributors    Distributor[]             @relation("DistributorAccountManager")
+  distributorNotes       DistributorNote[]         @relation("DistributorNoteAuthor")
   auditLogs              AuditLog[]
   notifications          Notification[]
   notificationPrefs      NotificationPreference[]
@@ -569,6 +571,8 @@ model Document {
 
   uploadedBy User?          @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   links      DocumentLink[]
+  kycRecords DistributorDocument[]
+  agreements Agreement[]
 
   @@index([checksumSha256])
   @@index([scanStatus])
@@ -783,7 +787,9 @@ model Address {
   state State @relation(fields: [stateId], references: [id])
   city  City? @relation(fields: [cityId], references: [id])
 
-  warehouses Warehouse[]
+  warehouses          Warehouse[]
+  billingDistributors  Distributor[] @relation("DistributorBilling")
+  shippingDistributors Distributor[] @relation("DistributorShipping")
 
   @@index([stateId])
   @@index([postalCode])
@@ -829,7 +835,8 @@ model Territory {
   state    State?      @relation(fields: [stateId], references: [id])
   manager  User?       @relation("TerritoryManager", fields: [managerId], references: [id], onDelete: SetNull)
 
-  warehouses Warehouse[]
+  warehouses   Warehouse[]
+  distributors Distributor[]
 
   @@index([parentId])
   @@index([path])
@@ -894,4 +901,208 @@ model Industry {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("industry")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// DISTRIBUTORS — the channel  (Phase 5)
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum DistributorType {
+  DISTRIBUTOR
+  DEALER
+  SYSTEM_INTEGRATOR
+  OEM_PARTNER
+}
+
+enum DistributorStatus {
+  LEAD
+  PENDING_APPROVAL
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+}
+
+enum KycDocumentType {
+  GST_CERTIFICATE
+  PAN_CARD
+  AGREEMENT
+  CANCELLED_CHEQUE
+  MSME_CERT
+  OTHER
+}
+
+enum AgreementStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  TERMINATED
+}
+
+/// A channel partner: distributor, dealer, system integrator, or OEM partner.
+///
+/// The SECOND scoped entity (after Territory). Registered in SCOPE_REGISTRY so
+/// a territory-scoped user can only ever read the distributors in their own
+/// subtree — see ADR-0003 and docs/15 §6.
+model Distributor {
+  id        String            @id @default(uuid(7)) @db.Uuid
+  /// Human-readable, allocated from NumberSequence: DIST-00042.
+  code      String            @unique
+  legalName String            @map("legal_name")
+  tradeName String?           @map("trade_name")
+  type      DistributorType   @default(DISTRIBUTOR)
+  status    DistributorStatus @default(LEAD)
+
+  territoryId      String? @map("territory_id") @db.Uuid
+  accountManagerId String? @map("account_manager_id") @db.Uuid
+
+  /// Assigned price list. Deliberately a plain column with no FK: PriceList
+  /// arrives in Phase 4, and adding the constraint then is a one-line
+  /// migration rather than a schema reshuffle.
+  priceListId String? @map("price_list_id") @db.Uuid
+
+  billingAddressId  String? @map("billing_address_id") @db.Uuid
+  shippingAddressId String? @map("shipping_address_id") @db.Uuid
+
+  // ── Statutory identity ──────────────────────────────────────────────────
+  /// Validated for format AND check digit before storage — a typo here
+  /// produces a legally defective invoice that must be cancelled by credit note.
+  gstin      String? @unique
+  pan        String?
+  tan        String?
+  cin        String?
+  msmeNumber String? @map("msme_number")
+
+  // ── Commercial terms ────────────────────────────────────────────────────
+  creditLimit    Decimal @default(0) @map("credit_limit") @db.Decimal(18, 4)
+  creditDays     Int     @default(30) @map("credit_days")
+  openingBalance Decimal @default(0) @map("opening_balance") @db.Decimal(18, 4)
+  paymentTermsCode String? @map("payment_terms_code")
+
+  // ── Banking. The account number is encrypted at rest (AES-256-GCM). ──────
+  bankAccountName      String? @map("bank_account_name")
+  bankAccountEncrypted String? @map("bank_account_encrypted")
+  bankIfsc             String? @map("bank_ifsc")
+  bankName             String? @map("bank_name")
+
+  website String?
+  tags    String[]
+
+  onboardedAt   DateTime? @map("onboarded_at") @db.Timestamptz(3)
+  suspendedAt   DateTime? @map("suspended_at") @db.Timestamptz(3)
+  statusReason  String?   @map("status_reason")
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+  updatedById String?   @map("updated_by_id") @db.Uuid
+
+  territory      Territory? @relation(fields: [territoryId], references: [id])
+  accountManager User?      @relation("DistributorAccountManager", fields: [accountManagerId], references: [id], onDelete: SetNull)
+  billingAddress  Address?  @relation("DistributorBilling", fields: [billingAddressId], references: [id])
+  shippingAddress Address?  @relation("DistributorShipping", fields: [shippingAddressId], references: [id])
+
+  contacts  DistributorContact[]
+  documents DistributorDocument[]
+  notes     DistributorNote[]
+  agreements Agreement[]
+
+  @@index([status, territoryId])
+  @@index([accountManagerId])
+  @@index([territoryId])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([deletedAt])
+  @@map("distributor")
+}
+
+model DistributorContact {
+  id            String  @id @default(uuid(7)) @db.Uuid
+  distributorId String  @map("distributor_id") @db.Uuid
+
+  name        String
+  designation String?
+  email       String?
+  phone       String?
+  isPrimary   Boolean @default(false) @map("is_primary")
+
+  /// The seam for the v2 Distributor Portal: onboarding a distributor user is
+  /// creating a User and linking it here, not building a second auth system.
+  portalUserId String? @map("portal_user_id") @db.Uuid
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  distributor Distributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
+
+  @@index([distributorId])
+  @@index([portalUserId])
+  @@map("distributor_contact")
+}
+
+/// KYC. A distributor cannot be approved until the required types are verified.
+model DistributorDocument {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  distributorId String          @map("distributor_id") @db.Uuid
+  documentId    String          @map("document_id") @db.Uuid
+  type          KycDocumentType
+
+  /// Certificates expire; an expiry sweep warns before they lapse.
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz(3)
+  verifiedAt   DateTime? @map("verified_at") @db.Timestamptz(3)
+  verifiedById String?   @map("verified_by_id") @db.Uuid
+  rejectedAt   DateTime? @map("rejected_at") @db.Timestamptz(3)
+  rejectionReason String? @map("rejection_reason")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  distributor Distributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
+  document    Document    @relation(fields: [documentId], references: [id])
+
+  @@unique([distributorId, type, documentId])
+  @@index([distributorId, type])
+  @@index([expiresAt])
+  @@map("distributor_document")
+}
+
+model DistributorNote {
+  id            String  @id @default(uuid(7)) @db.Uuid
+  distributorId String  @map("distributor_id") @db.Uuid
+  authorId      String? @map("author_id") @db.Uuid
+  body          String
+  isPinned      Boolean @default(false) @map("is_pinned")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  distributor Distributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
+  author      User?       @relation("DistributorNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([distributorId, isPinned, createdAt(sort: Desc)])
+  @@map("distributor_note")
+}
+
+model Agreement {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  distributorId String          @map("distributor_id") @db.Uuid
+  reference     String?
+  startDate     DateTime        @map("start_date") @db.Date
+  endDate       DateTime?       @map("end_date") @db.Date
+  targetAmount  Decimal?        @map("target_amount") @db.Decimal(18, 4)
+  status        AgreementStatus @default(DRAFT)
+  documentId    String?         @map("document_id") @db.Uuid
+  notes         String?
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  distributor Distributor @relation(fields: [distributorId], references: [id], onDelete: Cascade)
+  document    Document?   @relation(fields: [documentId], references: [id])
+
+  @@index([distributorId, status])
+  @@index([endDate])
+  @@map("agreement")
 }
