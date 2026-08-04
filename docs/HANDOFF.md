@@ -1,7 +1,7 @@
 # HANDOFF — Hixaa DMS
 
 > Everything a new session needs to continue this build without re-deriving it.
-> Last updated at the end of Phase 6. Read this before touching code.
+> Last updated at the end of Phase 7. Read this before touching code.
 
 ---
 
@@ -30,7 +30,7 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
 | **Branch** | `main` — clean, pushed, at `7cf5393` |
-| **Size** | ~31,300 source lines · 60 tables · 7 migrations · ~150 endpoints · 260 tests |
+| **Size** | ~38,400 source lines · 70 tables · 9 migrations · ~205 endpoints · 295 tests |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
 
 ### Phase status
@@ -42,12 +42,16 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | 3 — Master Data | ✅ Complete — `docs/15-phase-3-progress.md` |
 | 4 — Catalog & Pricing | ✅ Complete — `docs/18-phase-4-completion.md` |
 | 6 — Inventory | ✅ Complete — `docs/20-phase-6-completion.md` |
+| 7 — Sales | ✅ Complete — `docs/22-phase-7-completion.md` |
 | 5 — Distributors | ✅ Complete — `docs/16-phase-5-completion.md` |
 | 6–11 | Not started — see `docs/05-roadmap.md` |
 
-**Phase 7 (Sales) is now the critical path** — quotations and orders. Every seam is closed:
-`Distributor.priceListId`, `DistributorProduct`, and `Warehouse.distributorId` are all real FKs.
-Phase 7 wires the pricing engine and the stock ledger together into an order.
+**Phase 8 (Finance) is now the critical path** — invoicing, payments, GST returns. **Every seam
+in the schema is now closed**; `StockReservation.orderId` was the last one.
+
+⚠️ Phase 8 inherits four explicit obligations from Phase 7 — see `docs/22` §7. The important two:
+SECONDARY orders must be excluded from invoicing and GSTR-1, and an invoice must not ISSUE while
+`company.statutory.verified` is false (open question **E1**).
 
 ---
 
@@ -187,6 +191,18 @@ reading the quantity — check-then-lock is the classic oversell bug and it revi
 write `stock_ledger_entry` or `stock_balance` from anywhere else; the ledger is append-only and a
 database trigger will reject an UPDATE or DELETE regardless.
 
+### 4.16 A REQUEST never carries a price
+Quotation and order lines take product, quantity, and an optional override — never a price. Prices
+are resolved server-side by `PricingService.quote()` and SNAPSHOTTED onto the line (ADR-0011). If a
+client could post a price, the pricing engine would be advisory and every discount ceiling would be
+trivially bypassable.
+
+### 4.17 A library's README can be wrong; probe the package
+pdfmake 0.3 documents `new PdfPrinter(fonts)` — a class that no longer exists. Two implementations
+written from the docs typechecked and threw at the first render. The real API was found by reading
+`js/index.js` and calling it. Applies to any dependency whose major version moved: check the
+installed code, not the website.
+
 ## 5. Architecture in one screen
 
 ```
@@ -217,41 +233,57 @@ Six ADRs in `docs/adr/`. The ones that constrain daily work:
 - **0010** Moving weighted-average costing, held on `stock_balance.averageCost`. Outbound movements
   never change it. Every ledger row stores the cost used at that moment, so history is never
   restated.
+- **0011** Order and quotation lines SNAPSHOT their resolved pricing. Every input to a price is
+  mutable by design, so a document re-priced against today's data is not what was agreed.
+- **0012** Approval reserves what exists and BACKORDERS the rest. Dispatch is blocked per line.
+- **0013** PDFs render with pdfmake, not headless Chrome — no Chromium on a single VPS.
+- **0014** Channel inventory is DERIVED from dispatches, never self-reported. A sell-in dispatch
+  posts two movements; what remains in a distributor warehouse is what that partner holds.
 
 ### Scoped entities so far
 `SCOPE_REGISTRY` in `infrastructure/database/scope-registry.ts`:
 `territory` (self, subtree-expanded), `warehouse`, `distributor` (by territory),
 `distributorProduct` (via distributor), and the Phase 6 inventory models —
 `stockBalance`, `stockLedgerEntry`, `stockReservation`, `inventorySetting`, `stockCount`
-(all via warehouse), plus `serialNumber` (by distributor, because a dispatched serial has no
-warehouse). Commented-out entries mark where Phases 7–8 plug in.
+(all via warehouse), `serialNumber` (by distributor, because a dispatched serial has no
+warehouse), and the Phase 7 sales models — `order` and `quotation` (via distributor OR customer,
+since a SECONDARY order has no distributor), `shipment` (via warehouse), `customer` (by territory).
+
+Thirteen live entries. Commented-out entries mark where Phase 8 plugs in.
 
 The rest of the catalog — products, categories, price lists, discount rules, tax rates — is
 company-wide reference data and deliberately NOT scoped.
 
 ---
 
-## 6. What Phase 7 must deliver
+## 6. What Phase 8 must deliver
 
-From `docs/05-roadmap.md` §Phase 7. This is where the two engines built in Phases 4 and 6 meet.
+From `docs/05-roadmap.md` §Phase 8. This is the phase with real legal exposure.
 
-1. **Customers** — the end-customer domain (plants, mines, government bodies), with `Industry`
-   already seeded as real rows.
-2. **Quotations** — RFQ-first, which is how Hixaa's sales motion actually begins.
-3. **Orders** — `PRIMARY` (sell-in) and `SECONDARY` (sell-out), with the state machine already
-   declared as data in `ORDER_TRANSITIONS`.
-4. **Credit check and discount approval** — `Role.maxDiscountPercent` and `maxOrderValue` exist and
-   the pricing engine already FLAGS `requiresApproval`; Phase 7 is what blocks on it.
-5. **Shipments** — consume reservations, issue stock, capture serials at dispatch.
+1. **Tax invoices** — gapless statutory numbering per financial year (`NumberSequenceService`
+   already does this), immutable once issued, corrections by credit/debit note only.
+2. **Credit and debit notes** — the only way to correct an issued invoice.
+3. **Payments** — recording, verification (segregated from recording), multi-invoice allocation, TDS.
+4. **Ledger and outstanding** — `LedgerEntry` as the source of truth for what a distributor owes,
+   aged into 0–30 / 31–60 / 61–90 / 90+ buckets.
+5. **GSTR-1 / 3B export**, and e-Invoice / e-Way Bill **adapter hooks** (no live GSP calls in v1).
 
-**Do not reimplement pricing or stock.** Call `PricingService.quote()` (ADR-0007) and
-`StockLedgerService.move()` / `ReservationsService` (ADR-0002). Both are exported for this.
+**Reuse, do not rebuild:** `GstCalculator` (ADR-0008), `PricingService.quote()` (ADR-0007),
+`DocumentRendererService` (ADR-0013 — the invoice PDF is a sibling of the quotation, not a copy),
+`amountInWords`/`formatIndianDigits`, and `NumberSequenceService`.
 
-Register `order`, `quotation`, `shipment` (via distributor) and `customer` (by territory) in
-`SCOPE_REGISTRY` — the commented-out entries are already there — and prove refusal with
-`west.storekeeper`, not `west.manager` (§4.14).
+**Four obligations inherited from earlier phases** (`docs/22` §7):
 
-Add the FK from `StockReservation.orderId` to `Order`, the last open seam.
+- Exclude `type = 'SECONDARY'` orders from invoicing and GSTR-1 — a sell-out is the distributor's
+  sale, not Hixaa's (ADR-0014 §6).
+- Refuse to ISSUE while `company.statutory.verified` is false — **blocked on question E1**.
+- Refuse to ISSUE against `taxRateSource: 'PRODUCT_SNAPSHOT'` — that fallback is fine for a quote
+  and wrong for a legal document.
+- Add the outstanding-invoice term to `OrderApprovalService.checkCredit`, where it is already named
+  as a variable holding zero.
+
+Register `invoice` and `payment` in `SCOPE_REGISTRY` (entries are already stubbed) and prove refusal
+with an account that is scoped AND holds the permission (§4.14).
 
 ## 7. Open questions for the user
 
@@ -259,8 +291,8 @@ Still unanswered from `docs/12-recommendations.md` §E:
 
 | # | Question | Blocks |
 |---|---|---|
-| E1 | Hixaa's **real GSTIN, PAN, CIN** | **Phase 8 invoicing** — `company.statutory.verified` is `false` and invoicing must refuse to issue while it is |
-| E2 | Invoice number format the CA expects | Phase 8 |
+| **E1** | Hixaa's **real GSTIN, PAN, CIN** | 🔴 **BLOCKS PHASE 8.** `company.statutory.verified` is `false`; invoicing must refuse to issue while it is. The quotation PDF already prints a warning |
+| **E2** | Invoice number format the CA expects | 🔴 **Needed for Phase 8.** Currently `HTPL/INV/2026-27/00001` |
 | ~~E3~~ | ~~Warehouse list~~ | **ANSWERED**: one, at Nagpur. Seeded as `WH-NGP` |
 | E4 | Real territory structure | Seeded 5 zones as a guess; editable |
 | E5 | Hostinger VPS plan; is Docker installed | Phase 11 |

@@ -14,6 +14,7 @@
 
 export * from './primitives/money';
 export * from './primitives/india';
+export * from './primitives/indian-number';
 export * from './primitives/common';
 export * from './primitives/pagination';
 export * from './primitives/problem';
@@ -30,3 +31,5 @@ export * from './catalog/product.schema';
 export * from './catalog/pricing.schema';
 export * from './inventory/warehouse.schema';
 export * from './inventory/stock.schema';
+export * from './sales/customer.schema';
+export * from './sales/order.schema';

@@ -59,7 +59,6 @@ const NAV_SECTIONS: Array<{ heading: string; items: NavItem[] }> = [
         href: '/customers',
         icon: Users,
         permission: PERMISSIONS.CUSTOMER_READ,
-        phase: 7,
       },
       {
         label: 'Territories',
@@ -106,14 +105,12 @@ const NAV_SECTIONS: Array<{ heading: string; items: NavItem[] }> = [
         href: '/quotations',
         icon: FileText,
         permission: PERMISSIONS.QUOTATION_READ,
-        phase: 7,
       },
       {
         label: 'Orders',
         href: '/orders',
         icon: ShoppingCart,
         permission: PERMISSIONS.ORDER_READ,
-        phase: 7,
       },
     ],
   },

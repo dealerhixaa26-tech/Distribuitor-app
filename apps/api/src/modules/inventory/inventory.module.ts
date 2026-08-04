@@ -39,6 +39,9 @@ import { WarehousesService } from './warehouses.service';
     ReservationsService,
     SerialsService,
     ReconciliationService,
+    // Phase 7 provisions a DISTRIBUTOR channel warehouse on first dispatch
+    // (ADR-0014 §1), so the sales module needs this one too.
+    WarehousesService,
   ],
 })
 export class InventoryModule {}

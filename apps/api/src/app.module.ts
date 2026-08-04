@@ -22,6 +22,7 @@ import { HealthModule } from './modules/health/health.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { PricingModule } from './modules/pricing/pricing.module';
 import { RolesModule } from './modules/roles/roles.module';
+import { SalesModule } from './modules/sales/sales.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { TerritoriesModule } from './modules/territories/territories.module';
 import { UsersModule } from './modules/users/users.module';
@@ -71,6 +72,7 @@ import { UsersModule } from './modules/users/users.module';
     CatalogModule,
     PricingModule,
     InventoryModule,
+    SalesModule,
     AuditModule,
     HealthModule,
   ],

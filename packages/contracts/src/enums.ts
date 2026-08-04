@@ -61,6 +61,7 @@ export const CUSTOMER_TYPES = [
   'INDIVIDUAL',
 ] as const;
 export type CustomerType = (typeof CUSTOMER_TYPES)[number];
+export const customerTypeSchema = asEnum(CUSTOMER_TYPES);
 
 export const KYC_DOCUMENT_TYPES = [
   'GST_CERTIFICATE',
@@ -285,6 +286,31 @@ export const QUOTATION_STATUSES = [
   'CONVERTED',
 ] as const;
 export type QuotationStatus = (typeof QUOTATION_STATUSES)[number];
+export const quotationStatusSchema = asEnum(QUOTATION_STATUSES);
+
+/**
+ * A quotation is a PROPOSAL, so its lifecycle is deliberately looser than an
+ * order's — it can be re-sent, and a rejected one can be revised and sent again.
+ * What it cannot do is go backwards from CONVERTED: once an order exists, the
+ * quotation is history.
+ */
+export const QUOTATION_TRANSITIONS: Readonly<
+  Record<QuotationStatus, readonly QuotationStatus[]>
+> = {
+  DRAFT: ['SENT', 'REJECTED'],
+  SENT: ['ACCEPTED', 'REJECTED', 'EXPIRED', 'SENT'],
+  ACCEPTED: ['CONVERTED', 'REJECTED'],
+  REJECTED: ['DRAFT'],
+  EXPIRED: ['DRAFT'],
+  // Terminal. An order exists; revising means a new quotation.
+  CONVERTED: [],
+};
+
+export const canTransitionQuotation = (from: QuotationStatus, to: QuotationStatus): boolean =>
+  QUOTATION_TRANSITIONS[from].includes(to);
+
+/** Only these may be converted into an order. */
+export const CONVERTIBLE_QUOTATION_STATUSES: readonly QuotationStatus[] = ['ACCEPTED'];
 
 export const SHIPMENT_STATUSES = [
   'PENDING',
@@ -295,6 +321,47 @@ export const SHIPMENT_STATUSES = [
   'RETURNED',
 ] as const;
 export type ShipmentStatus = (typeof SHIPMENT_STATUSES)[number];
+export const shipmentStatusSchema = asEnum(SHIPMENT_STATUSES);
+
+/**
+ * Stock leaves the building exactly once. DISPATCHED is reachable only from
+ * PACKED, so a shipment cannot consume reservations twice — that would issue
+ * the same stock into the ledger a second time.
+ */
+export const SHIPMENT_TRANSITIONS: Readonly<Record<ShipmentStatus, readonly ShipmentStatus[]>> = {
+  PENDING: ['PACKED', 'RETURNED'],
+  PACKED: ['DISPATCHED', 'PENDING'],
+  DISPATCHED: ['IN_TRANSIT', 'DELIVERED', 'RETURNED'],
+  IN_TRANSIT: ['DELIVERED', 'RETURNED'],
+  DELIVERED: ['RETURNED'],
+  RETURNED: [],
+};
+
+export const canTransitionShipment = (from: ShipmentStatus, to: ShipmentStatus): boolean =>
+  SHIPMENT_TRANSITIONS[from].includes(to);
+
+/** What an approval was granted against. Mirrors the Prisma enum. */
+export const APPROVAL_KINDS = ['DISCOUNT', 'ORDER_VALUE', 'CREDIT_LIMIT'] as const;
+export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
+export const approvalKindSchema = asEnum(APPROVAL_KINDS);
+
+/**
+ * Order statuses at which stock is committed and must be released if the order
+ * dies. Declared as data so the cancel path cannot forget one.
+ */
+export const STOCK_COMMITTED_ORDER_STATUSES: readonly OrderStatus[] = [
+  'APPROVED',
+  'PROCESSING',
+  'PARTIALLY_DISPATCHED',
+];
+
+/** An order past this point has moved goods and can no longer be cancelled. */
+export const CANCELLABLE_ORDER_STATUSES: readonly OrderStatus[] = [
+  'DRAFT',
+  'PENDING_APPROVAL',
+  'APPROVED',
+  'PROCESSING',
+];
 
 // ── Finance ─────────────────────────────────────────────────────────────────
 
