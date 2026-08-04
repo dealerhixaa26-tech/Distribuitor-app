@@ -51,7 +51,8 @@ Read in order for the full picture, or jump to what you need.
 | 13 | [Phase 1 completion](docs/13-phase-1-completion.md) | Foundation: what was built and verified, deviations |
 | 14 | [Phase 2 completion](docs/14-phase-2-completion.md) | Identity & Access: verification, two bugs fixed |
 | 15 | [Phase 3 completion](docs/15-phase-3-progress.md) | Master Data: scope activation and the three bugs it exposed |
-| 16 | [**Phase 5 completion**](docs/16-phase-5-completion.md) | **Distributors: KYC gate, credit control, second scoped entity** |
+| 16 | [Phase 5 completion](docs/16-phase-5-completion.md) | Distributors: KYC gate, credit control, second scoped entity |
+| — | [**HANDOFF**](docs/HANDOFF.md) | **Start here in a new session: state, conventions, gotchas, what's next** |
 
 ### Architecture Decision Records
 
