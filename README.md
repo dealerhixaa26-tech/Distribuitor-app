@@ -3,12 +3,12 @@
 **Hixaa Technologies Pvt. Ltd.** · Nagpur, Maharashtra
 An enterprise Distributor Management System, architected to grow into a full ERP/CRM platform.
 
-> **Current status: Phase 2 — Identity & Access. Complete and verified.**
-> Authentication, authorization, users, roles, and the audit viewer all work end to end.
-> See [docs/14-phase-2-completion.md](docs/14-phase-2-completion.md) for what was verified,
-> the two bugs found and fixed, and the one thing worth doing before Phase 3.
+> **Current status: Phase 3 — Master Data. Complete and verified.**
+> Geography, territories, settings, and documents are live — and scoped RBAC now filters real
+> rows, not just endpoints. See [docs/15-phase-3-progress.md](docs/15-phase-3-progress.md) for
+> what was verified and the three latent bugs activating it exposed.
 >
-> Business modules (distributors, catalog, inventory, sales, finance) arrive in Phases 3–9 —
+> Business modules (catalog, distributors, inventory, sales, finance) arrive in Phases 4–9 —
 > see the [roadmap](docs/05-roadmap.md).
 
 ---
@@ -50,7 +50,8 @@ Read in order for the full picture, or jump to what you need.
 | 11 | [Environment Variables](docs/11-environment-variables.md) | Every variable, documented and validated at boot |
 | 12 | [**Recommendations**](docs/12-recommendations.md) | **What I recommend, the trade-offs, and what I need from you** |
 | 13 | [Phase 1 completion](docs/13-phase-1-completion.md) | Foundation: what was built and verified, deviations |
-| 14 | [**Phase 2 completion**](docs/14-phase-2-completion.md) | **Identity & Access: verification, two bugs fixed, known state** |
+| 14 | [Phase 2 completion](docs/14-phase-2-completion.md) | Identity & Access: verification, two bugs fixed |
+| 15 | [**Phase 3 completion**](docs/15-phase-3-progress.md) | **Master Data: scope activation and the three bugs it exposed** |
 
 ### Architecture Decision Records
 
@@ -122,12 +123,10 @@ After `pnpm db:seed`, the bootstrap administrator is the `SEED_SUPER_ADMIN_*` pa
 
 ## Next step
 
-**Phase 3 — Master Data**: geography with GST state codes, the territory hierarchy, system
-settings backed by the seeded Hixaa profile, and the document subsystem. It is also where the
-scoped-RBAC machinery from [ADR-0003](docs/adr/0003-scoped-rbac-for-future-distributor-portal.md)
-starts filtering real rows.
+**Phase 4 — Catalog & Pricing**: products with four types (goods, service, kit, configurable),
+bills of materials so a Raksha IoT deployment explodes into its components, technical
+specifications, versioned price lists with volume tiers, and the date-effective GST engine.
 
-Worth settling first: this repository is **not yet under version control**
-([why that matters](docs/14-phase-2-completion.md#7-one-thing-worth-doing-before-phase-3)), and
-the open questions in [docs/12-recommendations.md](docs/12-recommendations.md) §E — GSTIN,
-invoice format, territory structure, VPS plan, brand assets.
+Outstanding answers from [docs/12-recommendations.md](docs/12-recommendations.md) §E — Hixaa's
+real GSTIN, the invoice number format your CA expects, the territory structure Hixaa actually
+uses, the VPS plan, and brand assets. None block Phase 4; the GSTIN blocks invoicing in Phase 8.

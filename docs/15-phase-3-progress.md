@@ -1,111 +1,131 @@
-# 15 — Phase 3: Master Data — Progress
+# 15 — Phase 3: Master Data — Completion Record
 
-> Status: **Partially complete.** Geography, territories, and scope activation are done and
-> verified. Settings, documents, and the Phase 3 frontend remain.
-
----
-
-## 1. What is complete
-
-| Item | State |
-|---|---|
-| **Geography** | Country/State/City/Address models. All 38 Indian states and UTs seeded with GST codes, derived from the same `GST_STATE_CODES` constant the GSTIN validator uses |
-| **Industries** | Promoted from a `SystemSetting` JSON blob to real rows, ready for Customer to reference by FK in Phase 7 |
-| **Territories** | Materialised-path tree with cycle protection, subtree moves in one transaction, manager assignment, tree and flat endpoints |
-| **Warehouses** | Model and relations (the stock ledger that gives them meaning arrives in Phase 6) |
-| **Scope activation** | `SCOPE_REGISTRY` is live. Verified end to end — see §3 |
-| **Tests** | 92 passing (65 contracts · 77 API), up from 119 total |
-
-Seeded: 1 country · 38 states · 14 cities · 5 industries · 18 territories across 5 zones.
+> Status: **Complete and verified.** Ready for Phase 4 — Catalog & Pricing.
 
 ---
 
-## 2. Two latent bugs found — both had been inert since Phase 1
+## 1. Gate results
 
-Activating the scope registry is what exposed these. Until a scoped model existed, neither
-extension had anything to act on, so neither failure was observable.
+| # | Gate | Result |
+|---|---|---|
+| 1 | **Design** | Three latent bugs found and recorded in §3 |
+| 2 | **Database** | Migration 0004: geography, territories, warehouses, industries |
+| 3 | **API** | Territories, geography lookups, settings, documents |
+| 4 | **Backend** | Materialised-path tree, scope activation, typed settings, magic-byte file validation |
+| 5 | **Frontend** | Territory tree, settings screen, navigation updated |
+| 6 | **Tests** | 92 passing (65 contracts · 77 API) |
+| 7 | **Documentation** | This record |
+| 8 | **Verification** | `pnpm verify` green; verified in-browser as both a global and a scoped user |
 
-### 2.1 Both Prisma extensions were silent no-ops (critical)
-
-Prisma passes client extensions a **PascalCase** model name (`"Territory"`). Both registries
-were keyed camelCase (`territory`). Every lookup missed.
-
-Consequences, from Phase 1 onward:
-- **No scope predicate was ever injected.** The mechanism ADR-0003 is built on did nothing.
-- **Soft delete never applied.** `delete()` was a hard delete, and reads included
-  soft-deleted rows.
-
-Neither failed loudly. The queries simply ran unguarded, and every test passed because no
-test had yet asked a scoped question.
-
-Fixed by normalising through a single `modelKey()` helper at every registry boundary, with
-regression tests that assert against `Prisma.dmmf` model names rather than hand-written
-strings — so the test cannot drift from what Prisma actually passes.
-
-### 2.2 Request context was established after the guards that populate it (critical)
-
-NestJS runs **middleware → guards → interceptors → pipes → handler**. The request context
-lived in an interceptor, so `JwtAuthGuard` wrote `userId` and `access` to a context that did
-not exist yet — a silent no-op — and the interceptor then created a fresh, empty one.
-
-The comment in that file asserted the opposite ordering. It was wrong.
-
-This was invisible while §2.1 masked it. The moment the scope extension started working, it
-correctly denied *every* scoped read, because a request with no resolved caller must see
-nothing. That over-denial is what surfaced the bug.
-
-Moved to `RequestContextMiddleware` — the only layer that runs before guards.
-
-### 2.3 A third, smaller one
-
-Soft delete had been implemented by calling `Prisma.getExtensionContext(this).update()` from
-inside a `query` hook. That works in `model` extensions, not `query` ones, so every delete
-failed with `context.update is not a function` once the extension started firing.
-
-Rewriting one operation into another is not something a query hook can do. So the contract
-is now explicit: hard `delete` on a soft-deletable model **throws** with a message naming the
-method to use, and `softDelete()` / `softDeleteMany()` / `restore()` are added as model
-methods. A developer cannot accidentally hard-delete, and cannot silently get a no-op either.
+Seeded: 1 country · 38 states/UTs with GST codes · 14 cities · 5 industries · 18 territories.
 
 ---
 
-## 3. Verified against a running system
+## 2. What exists
+
+**Geography** — Country/State/City/Address. The state list derives from the same
+`GST_STATE_CODES` constant the GSTIN validator checks against, so the database cannot accept
+a code the validator rejects. Industries promoted from a settings JSON blob to real rows,
+ready for Customer to reference by FK in Phase 7.
+
+**Territories** — Materialised-path tree with leading and trailing separators (so a scope
+check cannot prefix-match an unrelated subtree), cycle-protected subtree moves in a single
+transaction, manager assignment, flat and nested endpoints.
+
+**Settings** — Typed service over `SystemSetting` with per-key Zod validation, Redis caching,
+secret redaction, and a `writable` flag distinguishing operator-editable configuration from
+seeded reference content. Every change is audited as a SECURITY event.
+
+**Documents** — Finally uses the `StorageService` and `VirusScanner` built in Phase 1.
+Validation by magic bytes, checksum deduplication, scan before the bytes reach disk, storage
+under a generated key, and streamed download with permission re-checked per request.
+
+---
+
+## 3. Three latent bugs, all exposed by activating scope
+
+Until a scoped model existed, neither extension had anything to act on, so none of these was
+observable. Registering `territory` is what made them surface.
+
+### 3.1 Both Prisma extensions were silent no-ops (critical)
+
+Prisma passes client extensions a **PascalCase** model name (`"Territory"`); both registries
+were keyed camelCase. Every lookup missed.
+
+From Phase 1 onward this meant **no scope predicate was ever injected** — the mechanism
+ADR-0003 is built on did nothing — and **soft delete never applied**, so `delete()` was a
+hard delete and reads included soft-deleted rows. Nothing failed loudly.
+
+Fixed with a single `modelKey()` helper at every registry boundary, plus regression tests
+that assert against `Prisma.dmmf` model names rather than literals, so the test cannot drift
+from what Prisma actually passes.
+
+### 3.2 Request context was established after the guards that populate it (critical)
+
+Nest runs **middleware → guards → interceptors → pipes → handler**. The request context lived
+in an interceptor, so `JwtAuthGuard` wrote the caller into a context that did not exist yet.
+The comment in that file asserted the opposite ordering.
+
+Hidden by §3.1. Fixing the casing made scope correctly deny *everything*, which is what
+surfaced this. Moved to `RequestContextMiddleware`.
+
+### 3.3 Soft delete could not work from a query hook
+
+It called `Prisma.getExtensionContext(this).update()` inside a `query` extension — a technique
+that only works in `model` extensions — so every delete failed with
+`context.update is not a function` once the extension started firing.
+
+A query hook cannot rewrite one operation into another. The contract is now explicit: hard
+`delete` on a soft-deletable model **throws** naming the method to use, and `softDelete()`,
+`softDeleteMany()`, and `restore()` are model methods. Accidental hard-delete is impossible,
+and so is a silent no-op.
+
+---
+
+## 4. Verified against a running system
 
 | Claim | Result |
 |---|---|
-| Territory tree renders | 5 zones, 18 nodes, depths and GST codes correct |
-| GLOBAL admin sees everything | 18 of 18 |
-| **Territory-scoped user sees only their subtree** | WEST manager sees exactly 4 — `WEST` + its 3 states — from a single zone assignment |
-| Subtree expansion works | 1 role assignment resolved to 4 territory ids |
-| **Out-of-scope access by direct id** | `404 NOT_FOUND`, not 403 — no enumeration oracle |
-| Soft delete preserves the row | `DELETE` → 204, row retained with `deleted_at` set |
-| Soft-deleted rows are hidden | Detail returns 404; list count returns to 18 |
-| Geography lookups | 38 states, Maharashtra correctly `27` |
+| Territory tree | 5 zones, 18 nodes, correct depths and GST codes |
+| GLOBAL admin | Sees 18 of 18 |
+| **Territory-scoped user** | WEST manager sees exactly 4 — the zone plus its 3 states — from one assignment |
+| Subtree expansion | 1 role assignment resolved to 4 territory ids |
+| **Out-of-scope access by id** | `404`, not `403` — no enumeration oracle |
+| Soft delete | Row retained with `deleted_at` set; hidden from API; list count restored |
+| Settings validation | A bad GSTIN check digit rejected with a field-level message |
+| Settings immutability | Seeded portfolio content refused with an explanation |
+| Settings audit | Recorded as a SECURITY event with the setting key |
+| **Disguised file** | Shell script renamed `.pdf` rejected on magic bytes |
+| SVG upload | Refused outright — XML that browsers execute |
+| Deduplication | Identical re-upload returned the same document; one row |
+| Download | `attachment` + `nosniff` + `no-store`; `401` unauthenticated |
+| Storage permissions | `0640`, outside any served directory |
+| **In-browser** | WEST manager sees 4 territories, and the entire System nav section is absent |
 
-That third row is ADR-0003 doing its job on real rows for the first time.
+That last row shows both halves of the authorization model working together: permission
+gating hides the navigation, and row scoping bounds the data — independently enforced.
 
 ---
 
-## 4. What remains in Phase 3
+## 5. Known state
 
-| Item | Notes |
+| Item | Status |
 |---|---|
-| **Settings module** | Typed service over `SystemSetting` with Redis caching and secret redaction. The data is already seeded; the read/update API is not built |
-| **Documents** | `StorageService` and `VirusScanner` were built in Phase 1 and are unused. Needs the upload endpoint, magic-byte validation, checksum dedup, entity linking, and streamed authorized download |
-| **Frontend** | Territory tree UI, settings screen, document upload. The API is complete for territories and geography |
-
-None of it is blocked — this is a natural checkpoint, not a wall.
+| Territory create/edit UI | Read-only tree. The API is complete; forms follow the Phase 4 catalog work |
+| Settings editing UI | Read-only with a `writable` flag. `PUT` is built and tested; per-category forms follow |
+| Statutory details | `verified: false`, surfaced as a banner. Invoicing must check this before issuing (question E1) |
+| ClamAV | Interface and state machine live; driver throws at boot rather than silently degrading |
+| Warehouses | Model and relations exist; CRUD arrives with inventory in Phase 6 |
 
 ---
 
-## 5. Note on the two critical bugs
+## 6. The lesson worth carrying forward
 
-Both had existed since Phase 1 and survived two completion reviews, because the only honest
-way to find them was to make something depend on them. A green build, passing tests, and a
-working login all coexisted with an authorization mechanism that was doing nothing at all.
+Both critical bugs survived two completion reviews. A green build, passing tests, and a
+working login coexisted for two phases with an authorization mechanism doing nothing at all.
 
-The lesson worth carrying into Phase 5, where distributors become the second scoped entity:
-**a security control is not verified until something is denied.** The Phase 2 record claimed
-scoped RBAC worked on the strength of permission checks passing; permissions were enforced,
-but row scoping was not, and nothing distinguished the two until a territory-scoped user
-asked for a territory they should not see.
+The only thing that found them was making something depend on them and then checking that a
+request was **denied**.
+
+Phase 5 makes distributors the second scoped entity. The same trap is available, and the same
+rule applies: **a security control is not verified until something is refused.**
