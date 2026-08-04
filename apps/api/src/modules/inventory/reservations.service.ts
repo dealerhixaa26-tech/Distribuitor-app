@@ -11,7 +11,10 @@ import { ClockService } from '../../common/utils/clock.service';
 import { ConflictError, NotFoundError } from '../../common/errors/domain.error';
 import { keysetWhere, toListResult } from '../../common/utils/pagination.util';
 import { AuditService } from '../../infrastructure/database/audit.service';
-import { PrismaService } from '../../infrastructure/database/prisma.service';
+import {
+  PrismaService,
+  type PrismaTransaction,
+} from '../../infrastructure/database/prisma.service';
 import { StockLedgerService } from './stock-ledger.service';
 
 /**
@@ -147,6 +150,98 @@ export class ReservationsService {
   /** Gives the stock back. No ledger row — nothing physically moved. */
   async release(id: string, actorId: string) {
     return this.close(id, 'RELEASED', actorId);
+  }
+
+  /**
+   * Draws PART of a reservation down as goods actually ship.
+   *
+   * A shipment rarely matches a reservation exactly — a line reserved for 10
+   * may go out as 4 now and 6 later. `consume()` handles the whole-reservation
+   * case; this handles the partial one, and both release the hold AND post the
+   * ISSUE in the same transaction for the same reason: stock must never be
+   * decremented without its reservation clearing, nor the reverse.
+   *
+   * The reservation's quantity is reduced as it is drawn down and the row is
+   * marked CONSUMED only when nothing remains. History is not lost by that —
+   * the LEDGER is the source of truth for what moved, and it has a row per
+   * shipment.
+   */
+  async consumeQuantity(
+    tx: PrismaTransaction,
+    input: {
+      orderId: string;
+      warehouseId: string;
+      productId: string;
+      variantId?: string | null;
+      quantity: string;
+      refType?: string;
+      refId?: string;
+      actorId: string;
+    },
+  ): Promise<{ remaining: string }> {
+    const reservation = await tx.stockReservation.findFirst({
+      where: {
+        orderId: input.orderId,
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        variantId: input.variantId ?? null,
+        status: 'ACTIVE',
+      },
+      select: { id: true, quantity: true },
+    });
+
+    if (!reservation) {
+      // Invariant 2 of docs/00 §4.2: stock cannot be dispatched that is not on
+      // hand AND reserved. No reservation means this quantity was never
+      // committed to this order — most likely it is backordered.
+      throw new ConflictError(
+        'No active reservation covers this dispatch. Stock can only be dispatched against ' +
+          'stock that was reserved for this order — a backordered line cannot ship until ' +
+          'the stock arrives and is reserved.',
+      );
+    }
+
+    const held = Money.of(reservation.quantity.toFixed(4));
+    const wanted = Money.of(input.quantity);
+
+    if (wanted.gt(held)) {
+      throw new ConflictError(
+        `Cannot dispatch ${wanted.toDisplayString()} — only ${held.toDisplayString()} is ` +
+          'reserved for this order line.',
+      );
+    }
+
+    await this.ledger.adjustReserved(tx, {
+      warehouseId: input.warehouseId,
+      productId: input.productId,
+      variantId: input.variantId ?? null,
+      delta: wanted.negate().toString(),
+    });
+
+    await this.ledger.move(tx, {
+      warehouseId: input.warehouseId,
+      productId: input.productId,
+      variantId: input.variantId ?? null,
+      movementType: 'ISSUE',
+      quantity: wanted.toString(),
+      refType: input.refType ?? 'SHIPMENT',
+      refId: input.refId ?? input.orderId,
+      actorId: input.actorId,
+    });
+
+    const remaining = held.subtract(wanted);
+
+    await tx.stockReservation.update({
+      where: { id: reservation.id },
+      data: {
+        quantity: remaining.toString(),
+        ...(remaining.isZero()
+          ? { status: 'CONSUMED' as const, consumedAt: this.clock.now() }
+          : {}),
+      },
+    });
+
+    return { remaining: remaining.toString() };
   }
 
   /** Sweeps a stale hold so stock is not locked behind a dead order. */

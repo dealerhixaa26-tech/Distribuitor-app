@@ -107,6 +107,33 @@ export const viaDistributor = (relation = 'distributor'): ScopeStrategy => ({
 });
 
 /**
+ * Reaches a territory through EITHER a distributor or a customer.
+ *
+ * A PRIMARY order names a distributor; a SECONDARY order names a customer and
+ * may have no distributor at all. Using `viaDistributor()` alone would make
+ * every sell-out invisible to a territory-scoped user — the rows would simply
+ * not match, which is the quiet kind of failure that reads as "no data yet".
+ */
+export const viaDistributorOrCustomer = (): ScopeStrategy => ({
+  build(access) {
+    if (access.scopeType === 'GLOBAL') return null;
+
+    if (access.scopeType === 'DISTRIBUTOR') {
+      if (access.distributorIds.length === 0) return DENY_ALL;
+      return { distributorId: { in: access.distributorIds } };
+    }
+
+    if (access.territoryIds.length === 0) return DENY_ALL;
+    return {
+      OR: [
+        { distributor: { territoryId: { in: access.territoryIds } } },
+        { customer: { territoryId: { in: access.territoryIds } } },
+      ],
+    };
+  },
+});
+
+/**
  * The scope registry. Keys are Prisma model names as they appear in
  * `Prisma.ModelName` (camelCase).
  */
@@ -150,11 +177,16 @@ export const SCOPE_REGISTRY: Readonly<Record<string, ScopeStrategy>> = {
   // "which of MY partners has this unit?"
   serialNumber: byDistributor('currentDistributorId'),
 
-  // ── Phase 7 ──
-  // order:       viaDistributor(),
-  // quotation:   viaDistributor(),
-  // shipment:    viaDistributor(),
-  // customer:    byTerritory(),
+  // ── Phase 7 — live ──
+  // An order reaches a territory through its distributor. A SECONDARY order has
+  // no distributor of its own, so it falls back to the customer's territory —
+  // handled by `viaDistributorOrCustomer` below.
+  order:     viaDistributorOrCustomer(),
+  quotation: viaDistributorOrCustomer(),
+  // A shipment has neither; it reaches a territory through the WAREHOUSE it
+  // ships from, which is already territory-scoped.
+  shipment:  viaWarehouse(),
+  customer:  byTerritory(),
   // ── Phase 8 ──
   // invoice:     viaDistributor(),
   // payment:     viaDistributor(),

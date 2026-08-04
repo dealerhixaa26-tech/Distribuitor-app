@@ -205,6 +205,49 @@ export class StockLedgerService {
     return { balanceId: balance.id, quantityReserved: reservedAfter.toString() };
   }
 
+  /**
+   * Reserves AS MUCH as is available, up to `requested`, and reports both.
+   *
+   * Exists for ADR-0012: approval reserves what exists and backorders the rest.
+   * The decision of "how much is available" is made HERE, under the same row
+   * lock as the write — computing it in the caller and then reserving would be
+   * a read-then-write race, and two orders approving simultaneously could each
+   * believe the same units were free.
+   *
+   * Returns zero reserved rather than throwing when nothing is available: for a
+   * build-to-order business that is a normal outcome, not an error.
+   */
+  async reserveUpTo(
+    tx: PrismaTransaction,
+    input: {
+      warehouseId: string;
+      productId: string;
+      variantId?: string | null;
+      requested: string;
+    },
+  ): Promise<{ reserved: string; backordered: string }> {
+    const balance = await this.lockBalance(tx, input);
+
+    const requested = Money.of(input.requested);
+    const onHand = Money.of(balance.quantityOnHand);
+    const alreadyReserved = Money.of(balance.quantityReserved);
+    const available = Money.max(onHand.subtract(alreadyReserved), Money.zero());
+
+    const toReserve = Money.min(requested, available);
+
+    if (toReserve.isPositive()) {
+      await tx.stockBalance.update({
+        where: { id: balance.id },
+        data: { quantityReserved: alreadyReserved.add(toReserve).toString() },
+      });
+    }
+
+    return {
+      reserved: toReserve.toString(),
+      backordered: requested.subtract(toReserve).toString(),
+    };
+  }
+
   // ── Internals ─────────────────────────────────────────────────────────────
 
   /**

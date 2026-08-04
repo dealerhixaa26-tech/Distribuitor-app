@@ -260,6 +260,66 @@ export class WarehousesService {
     });
   }
 
+  /**
+   * Finds or provisions the DISTRIBUTOR-type warehouse for a partner.
+   *
+   * ADR-0014: channel inventory is derived from dispatches, so a partner needs
+   * a stock location the first time goods reach them. Created lazily rather
+   * than at distributor approval — a hundred LEAD-stage partners should not
+   * produce a hundred empty warehouses.
+   *
+   * Runs inside the caller's dispatch transaction, so a failed dispatch does
+   * not leave an orphan warehouse behind.
+   */
+  async ensureForDistributor(
+    tx: PrismaTransaction,
+    distributorId: string,
+    actorId: string,
+  ): Promise<string> {
+    const existing = await tx.warehouse.findFirst({
+      where: { distributorId, type: 'DISTRIBUTOR' },
+      select: { id: true },
+    });
+    if (existing) return existing.id;
+
+    const distributor = await tx.distributor.findFirst({
+      where: { id: distributorId },
+      select: { id: true, code: true, legalName: true, territoryId: true },
+    });
+    if (!distributor) throw new NotFoundError('Distributor', distributorId);
+
+    const created = await tx.warehouse.create({
+      data: {
+        code: `WH-${distributor.code}`,
+        name: `${distributor.legalName} — channel stock`,
+        type: 'DISTRIBUTOR',
+        distributorId,
+        // Inherits the partner's territory, so the same scope boundary that
+        // governs the distributor governs their stock.
+        territoryId: distributor.territoryId,
+        isDefault: false,
+        isActive: true,
+        createdById: actorId,
+      },
+      select: { id: true, code: true },
+    });
+
+    await this.audit.record(tx, {
+      action: 'warehouse.provisioned_for_distributor',
+      entityType: 'Warehouse',
+      entityId: created.id,
+      after: { code: created.code, distributor: distributor.code },
+      metadata: { actorId },
+    });
+
+    this.logger.info(
+      { warehouseId: created.id, code: created.code, distributor: distributor.code },
+      'Provisioned distributor channel warehouse',
+    );
+
+    return created.id;
+  }
+
   // ── Internals ─────────────────────────────────────────────────────────────
 
   private assertDistributorMatchesType(type: string, distributorId?: string): void {

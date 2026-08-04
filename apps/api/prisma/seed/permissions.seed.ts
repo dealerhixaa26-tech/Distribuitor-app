@@ -126,6 +126,14 @@ export const ROLE_DEFINITIONS: readonly RoleDefinition[] = [
       P.PAYMENT_READ, P.PAYMENT_VERIFY, P.PAYMENT_ALLOCATE, P.PAYMENT_UPDATE,
       P.DISTRIBUTOR_READ, P.DISTRIBUTOR_CREDIT_UPDATE,
       P.CUSTOMER_READ, P.ORDER_READ, P.PRODUCT_READ, P.PRICELIST_READ,
+      // ORDER_APPROVE is required for the credit-limit override, not for
+      // routine approval: docs/00 §4.2 invariant 1 says a breach may only be
+      // forgiven by a Finance Manager, and that override is exercised THROUGH
+      // `POST /orders/:id/approve`. Without this the invariant is
+      // unimplementable — found in Phase 7 by attempting it. The 20% discount
+      // ceiling still bounds what they may approve, and self-approval is
+      // refused regardless of role.
+      P.ORDER_APPROVE,
       P.DISCOUNT_READ, P.DISCOUNT_APPROVE,
       P.ANALYTICS_READ, P.ANALYTICS_READ_FINANCIAL,
       P.REPORT_READ, P.REPORT_CREATE, P.REPORT_RUN, P.REPORT_SCHEDULE, P.REPORT_EXPORT,

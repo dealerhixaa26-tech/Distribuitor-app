@@ -791,6 +791,8 @@ model Address {
   warehouses          Warehouse[]
   billingDistributors  Distributor[] @relation("DistributorBilling")
   shippingDistributors Distributor[] @relation("DistributorShipping")
+  billingCustomers     Customer[]    @relation("CustomerBilling")
+  shippingCustomers    Customer[]    @relation("CustomerShipping")
 
   @@index([stateId])
   @@index([postalCode])
@@ -838,6 +840,7 @@ model Territory {
 
   warehouses   Warehouse[]
   distributors Distributor[]
+  customers    Customer[]
 
   @@index([parentId])
   @@index([path])
@@ -891,6 +894,8 @@ model Warehouse {
   transfersIn       StockTransfer[]    @relation("TransferDestination")
   inventorySettings InventorySetting[]
   stockCounts       StockCount[]
+  orders            Order[]
+  shipments         Shipment[]
 
   @@index([type, isActive])
   @@index([territoryId])
@@ -912,6 +917,8 @@ model Industry {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  customers Customer[]
 
   @@map("industry")
 }
@@ -1027,6 +1034,10 @@ model Distributor {
   /// Distributor-owned warehouses, and the serials shipped to this partner.
   warehouses         Warehouse[]
   serials            SerialNumber[]
+  // ── Sales (Phase 7) ─────────────────────────────────────────────────────
+  customers          Customer[]
+  quotations         Quotation[]
+  orders             Order[]
 
   @@index([status, territoryId])
   @@index([priceListId])
@@ -1360,6 +1371,9 @@ model Product {
   transferLines     StockTransferLine[]
   inventorySettings InventorySetting[]
   stockCountLines   StockCountLine[]
+  // ── Sales (Phase 7) ─────────────────────────────────────────────────────
+  quotationLines    QuotationLine[]
+  orderLines        OrderLine[]
 
   @@index([categoryId, status])
   @@index([brandId])
@@ -1407,6 +1421,8 @@ model ProductVariant {
   reservations    StockReservation[]
   transferLines   StockTransferLine[]
   stockCountLines StockCountLine[]
+  quotationLines  QuotationLine[]
+  orderLines      OrderLine[]
 
   @@index([productId, isActive])
   @@index([deletedAt])
@@ -1883,8 +1899,9 @@ model StockReservation {
   productId   String  @map("product_id") @db.Uuid
   variantId   String? @map("variant_id") @db.Uuid
 
-  /// The order this is held for. A plain column until Order arrives in Phase 7 —
-  /// the same seam pattern used for priceListId and distributorId before it.
+  /// The order this is held for. Phase 6 left this a plain column because Order
+  /// did not exist yet; Phase 7 closed the seam and it is now a real FK. This
+  /// was the last open seam in the schema.
   orderId String? @map("order_id") @db.Uuid
 
   quantity Decimal           @db.Decimal(18, 4)
@@ -1904,6 +1921,7 @@ model StockReservation {
   warehouse Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
   product   Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  order     Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
 
   @@index([warehouseId, productId, status])
   @@index([orderId])
@@ -2081,4 +2099,503 @@ model StockCountLine {
 
   @@unique([stockCountId, productId, variantId])
   @@map("stock_count_line")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SALES (Phase 7)
+//
+// Where the pricing engine (ADR-0007) and the stock ledger (ADR-0002) meet.
+// Nothing here reimplements either: a price comes from PricingService.quote()
+// and stock moves through StockLedgerService / ReservationsService.
+//
+// The governing rule for every line below is ADR-0011: a line stores the
+// RESOLVED commercial figures, not the inputs that produced them. Every input
+// to a price is mutable by design — price lists are cloned, discount rules
+// expire, GST rates change — so an order re-priced against today's data is not
+// the order the customer agreed to.
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum CustomerType {
+  INDUSTRIAL
+  GOVERNMENT
+  OEM
+  INSTITUTIONAL
+  INDIVIDUAL
+}
+
+enum OrderType {
+  PRIMARY
+  SECONDARY
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PROCESSING
+  PARTIALLY_DISPATCHED
+  DISPATCHED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  REJECTED
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CONVERTED
+}
+
+enum ShipmentStatus {
+  PENDING
+  PACKED
+  DISPATCHED
+  IN_TRANSIT
+  DELIVERED
+  RETURNED
+}
+
+/// What an approval was granted against, so a decision is explicable later.
+enum ApprovalKind {
+  DISCOUNT
+  ORDER_VALUE
+  CREDIT_LIMIT
+}
+
+/// An end customer: a plant, a mine, a government body. Distinct from a
+/// Distributor, which is a channel partner. A SECONDARY (sell-out) order is
+/// distributor → customer; a PRIMARY order is Hixaa → distributor.
+model Customer {
+  id     String       @id @default(uuid(7)) @db.Uuid
+  code   String       @unique
+  name   String
+  type   CustomerType @default(INDUSTRIAL)
+
+  /// Which distributor services this customer, if any. Sell-out is reported
+  /// against the pair.
+  distributorId String? @map("distributor_id") @db.Uuid
+  territoryId   String? @map("territory_id") @db.Uuid
+  industryId    String? @map("industry_id") @db.Uuid
+
+  gstin String?
+  pan   String?
+
+  billingAddressId  String? @map("billing_address_id") @db.Uuid
+  shippingAddressId String? @map("shipping_address_id") @db.Uuid
+
+  /// The plant or site, where that differs from the billing entity — a single
+  /// power utility may have many.
+  siteName String? @map("site_name")
+  website  String?
+  notes    String?
+  tags     String[]
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+  updatedById String?   @map("updated_by_id") @db.Uuid
+
+  distributor     Distributor? @relation(fields: [distributorId], references: [id], onDelete: Restrict)
+  territory       Territory?   @relation(fields: [territoryId], references: [id])
+  industry        Industry?    @relation(fields: [industryId], references: [id])
+  billingAddress  Address?     @relation("CustomerBilling", fields: [billingAddressId], references: [id])
+  shippingAddress Address?     @relation("CustomerShipping", fields: [shippingAddressId], references: [id])
+
+  contacts   CustomerContact[]
+  quotations Quotation[]
+  orders     Order[]
+
+  @@index([territoryId, isActive])
+  @@index([distributorId])
+  @@index([industryId])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([deletedAt])
+  @@map("customer")
+}
+
+model CustomerContact {
+  id         String  @id @default(uuid(7)) @db.Uuid
+  customerId String  @map("customer_id") @db.Uuid
+  name       String
+  designation String?
+  email      String?
+  phone      String?
+  isPrimary  Boolean @default(false) @map("is_primary")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([deletedAt])
+  @@map("customer_contact")
+}
+
+/// A priced proposal. Hixaa's motion begins here, not at a reorder.
+model Quotation {
+  id     String          @id @default(uuid(7)) @db.Uuid
+  number String          @unique
+  status QuotationStatus @default(DRAFT)
+
+  /// Revisions share a group id, so "quotation QT/2026-27/00042 rev 3" is one
+  /// conversation rather than three unrelated documents.
+  groupId  String @map("group_id") @db.Uuid
+  revision Int    @default(1)
+
+  distributorId String? @map("distributor_id") @db.Uuid
+  customerId    String? @map("customer_id") @db.Uuid
+
+  /// Place of supply decides the CGST/SGST vs IGST split (ADR-0008). Snapshotted
+  /// because a customer's address can change after the quote is sent.
+  placeOfSupplyStateCode String? @map("place_of_supply_state_code")
+  priceListId            String? @map("price_list_id") @db.Uuid
+
+  quotationDate DateTime  @map("quotation_date") @db.Date
+  validUntil    DateTime? @map("valid_until") @db.Date
+
+  // ── Totals, snapshotted (ADR-0011) ──────────────────────────────────────
+  subtotal      Decimal @default(0) @db.Decimal(18, 4)
+  totalDiscount Decimal @default(0) @map("total_discount") @db.Decimal(18, 4)
+  taxableValue  Decimal @default(0) @map("taxable_value") @db.Decimal(18, 4)
+  totalCgst     Decimal @default(0) @map("total_cgst") @db.Decimal(18, 4)
+  totalSgst     Decimal @default(0) @map("total_sgst") @db.Decimal(18, 4)
+  totalIgst     Decimal @default(0) @map("total_igst") @db.Decimal(18, 4)
+  totalTax      Decimal @default(0) @map("total_tax") @db.Decimal(18, 4)
+  roundOff      Decimal @default(0) @map("round_off") @db.Decimal(18, 4)
+  grandTotal    Decimal @default(0) @map("grand_total") @db.Decimal(18, 4)
+
+  termsAndConditions String? @map("terms_and_conditions")
+  notes              String?
+
+  sentAt     DateTime? @map("sent_at") @db.Timestamptz(3)
+  acceptedAt DateTime? @map("accepted_at") @db.Timestamptz(3)
+  rejectedAt DateTime? @map("rejected_at") @db.Timestamptz(3)
+  rejectionReason String? @map("rejection_reason")
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+
+  distributor Distributor? @relation(fields: [distributorId], references: [id], onDelete: Restrict)
+  customer    Customer?    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  lines  QuotationLine[]
+  orders Order[]
+
+  @@index([status, quotationDate(sort: Desc)])
+  @@index([distributorId])
+  @@index([customerId])
+  @@index([groupId, revision])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([deletedAt])
+  @@map("quotation")
+}
+
+/// One quoted line, carrying the RESOLVED price rather than a reference to it.
+/// See ADR-0011 for why every one of these columns is stored and not derived.
+model QuotationLine {
+  id          String @id @default(uuid(7)) @db.Uuid
+  quotationId String @map("quotation_id") @db.Uuid
+  lineNumber  Int    @map("line_number")
+
+  productId String  @map("product_id") @db.Uuid
+  variantId String? @map("variant_id") @db.Uuid
+
+  /// Snapshotted: a product renamed later must not rewrite a document the
+  /// customer already holds.
+  sku         String
+  description String
+  /// Which revision of the product this was quoted against.
+  productRevision Int @default(1) @map("product_revision")
+
+  quantity Decimal @db.Decimal(18, 4)
+  uomCode  String? @map("uom_code")
+
+  unitListPrice   Decimal @map("unit_list_price") @db.Decimal(18, 4)
+  unitPrice       Decimal @map("unit_price") @db.Decimal(18, 4)
+  discountAmount  Decimal @default(0) @map("discount_amount") @db.Decimal(18, 4)
+  discountPercent Decimal @default(0) @map("discount_percent") @db.Decimal(9, 4)
+  discountRuleId  String? @map("discount_rule_id") @db.Uuid
+  /// Mandatory when the price was overridden (ADR-0007 §4).
+  overrideReason  String? @map("override_reason")
+
+  taxableValue Decimal @map("taxable_value") @db.Decimal(18, 4)
+  hsnSacCode   String? @map("hsn_sac_code")
+  gstRate      Decimal @default(0) @map("gst_rate") @db.Decimal(5, 2)
+  cgst         Decimal @default(0) @db.Decimal(18, 4)
+  sgst         Decimal @default(0) @db.Decimal(18, 4)
+  igst         Decimal @default(0) @db.Decimal(18, 4)
+  cess         Decimal @default(0) @db.Decimal(18, 4)
+  totalTax     Decimal @default(0) @map("total_tax") @db.Decimal(18, 4)
+  lineTotal    Decimal @map("line_total") @db.Decimal(18, 4)
+
+  notes String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  quotation Quotation       @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@unique([quotationId, lineNumber])
+  @@index([productId])
+  @@map("quotation_line")
+}
+
+/// A committed order. PRIMARY is Hixaa → distributor; SECONDARY is the
+/// distributor's own sell-out to an end customer.
+model Order {
+  id     String      @id @default(uuid(7)) @db.Uuid
+  number String      @unique
+  type   OrderType   @default(PRIMARY)
+  status OrderStatus @default(DRAFT)
+
+  distributorId String? @map("distributor_id") @db.Uuid
+  customerId    String? @map("customer_id") @db.Uuid
+  quotationId   String? @map("quotation_id") @db.Uuid
+  /// Which warehouse fulfils this order. Reservations are taken here.
+  warehouseId   String? @map("warehouse_id") @db.Uuid
+
+  placeOfSupplyStateCode String? @map("place_of_supply_state_code")
+  priceListId            String? @map("price_list_id") @db.Uuid
+
+  orderDate    DateTime  @map("order_date") @db.Date
+  expectedDate DateTime? @map("expected_date") @db.Date
+  /// The partner's own reference, quoted back on documents.
+  customerPoNumber String?   @map("customer_po_number")
+  customerPoDate   DateTime? @map("customer_po_date") @db.Date
+
+  paymentTermsCode String? @map("payment_terms_code")
+
+  billingAddressId  String? @map("billing_address_id") @db.Uuid
+  shippingAddressId String? @map("shipping_address_id") @db.Uuid
+
+  // ── Totals, frozen at approval (ADR-0011) ───────────────────────────────
+  subtotal      Decimal @default(0) @db.Decimal(18, 4)
+  totalDiscount Decimal @default(0) @map("total_discount") @db.Decimal(18, 4)
+  taxableValue  Decimal @default(0) @map("taxable_value") @db.Decimal(18, 4)
+  totalCgst     Decimal @default(0) @map("total_cgst") @db.Decimal(18, 4)
+  totalSgst     Decimal @default(0) @map("total_sgst") @db.Decimal(18, 4)
+  totalIgst     Decimal @default(0) @map("total_igst") @db.Decimal(18, 4)
+  totalTax      Decimal @default(0) @map("total_tax") @db.Decimal(18, 4)
+  roundOff      Decimal @default(0) @map("round_off") @db.Decimal(18, 4)
+  grandTotal    Decimal @default(0) @map("grand_total") @db.Decimal(18, 4)
+
+  /// True when the credit limit was breached and a Finance Manager overrode it.
+  /// Kept on the order, not only in the audit log, so the exception is visible
+  /// on the record itself rather than requiring an audit search.
+  creditOverridden       Boolean @default(false) @map("credit_overridden")
+  creditOverrideReason   String? @map("credit_override_reason")
+
+  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(3)
+  approvedAt  DateTime? @map("approved_at") @db.Timestamptz(3)
+  approvedById String?  @map("approved_by_id") @db.Uuid
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  statusReason String?  @map("status_reason")
+
+  notes String?
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+
+  distributor Distributor? @relation(fields: [distributorId], references: [id], onDelete: Restrict)
+  customer    Customer?    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  quotation   Quotation?   @relation(fields: [quotationId], references: [id], onDelete: SetNull)
+  warehouse   Warehouse?   @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+
+  lines        OrderLine[]
+  approvals    OrderApproval[]
+  shipments    Shipment[]
+  timeline     OrderTimeline[]
+  reservations StockReservation[]
+
+  @@index([status, orderDate(sort: Desc)])
+  @@index([distributorId, status])
+  @@index([customerId])
+  @@index([quotationId])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([deletedAt])
+  @@map("order")
+}
+
+model OrderLine {
+  id         String @id @default(uuid(7)) @db.Uuid
+  orderId    String @map("order_id") @db.Uuid
+  lineNumber Int    @map("line_number")
+
+  productId String  @map("product_id") @db.Uuid
+  variantId String? @map("variant_id") @db.Uuid
+
+  sku             String
+  description     String
+  productRevision Int @default(1) @map("product_revision")
+
+  quantity Decimal @db.Decimal(18, 4)
+  uomCode  String? @map("uom_code")
+
+  /// ADR-0012: approval reserves what exists and backorders the rest, so a line
+  /// tracks three quantities. `quantity` is what was ordered and never changes.
+  quantityReserved    Decimal @default(0) @map("quantity_reserved") @db.Decimal(18, 4)
+  quantityBackordered Decimal @default(0) @map("quantity_backordered") @db.Decimal(18, 4)
+  quantityDispatched  Decimal @default(0) @map("quantity_dispatched") @db.Decimal(18, 4)
+  /// From the product's lead time. An estimate, and labelled as one.
+  expectedAvailableDate DateTime? @map("expected_available_date") @db.Date
+
+  unitListPrice   Decimal @map("unit_list_price") @db.Decimal(18, 4)
+  unitPrice       Decimal @map("unit_price") @db.Decimal(18, 4)
+  discountAmount  Decimal @default(0) @map("discount_amount") @db.Decimal(18, 4)
+  discountPercent Decimal @default(0) @map("discount_percent") @db.Decimal(9, 4)
+  discountRuleId  String? @map("discount_rule_id") @db.Uuid
+  overrideReason  String? @map("override_reason")
+
+  taxableValue Decimal @map("taxable_value") @db.Decimal(18, 4)
+  hsnSacCode   String? @map("hsn_sac_code")
+  gstRate      Decimal @default(0) @map("gst_rate") @db.Decimal(5, 2)
+  cgst         Decimal @default(0) @db.Decimal(18, 4)
+  sgst         Decimal @default(0) @db.Decimal(18, 4)
+  igst         Decimal @default(0) @db.Decimal(18, 4)
+  cess         Decimal @default(0) @db.Decimal(18, 4)
+  totalTax     Decimal @default(0) @map("total_tax") @db.Decimal(18, 4)
+  lineTotal    Decimal @map("line_total") @db.Decimal(18, 4)
+
+  notes String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order   Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  shipmentLines ShipmentLine[]
+
+  @@unique([orderId, lineNumber])
+  @@index([productId])
+  @@map("order_line")
+}
+
+/// Who approved what, against which ceiling. Append-only: an approval is a
+/// statement someone made at a moment, and editing it would destroy the record
+/// of who authorised a concession.
+model OrderApproval {
+  id      String       @id @default(uuid(7)) @db.Uuid
+  orderId String       @map("order_id") @db.Uuid
+  kind    ApprovalKind
+
+  /// The figure approved and the ceiling the approver held, both recorded so
+  /// the decision is explicable without re-deriving anyone's permissions.
+  requestedValue Decimal  @map("requested_value") @db.Decimal(18, 4)
+  approverCeiling Decimal? @map("approver_ceiling") @db.Decimal(18, 4)
+
+  approvedById String  @map("approved_by_id") @db.Uuid
+  reason       String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt(sort: Desc)])
+  @@map("order_approval")
+}
+
+/// A physical dispatch against an order.
+model Shipment {
+  id      String         @id @default(uuid(7)) @db.Uuid
+  number  String         @unique
+  orderId String         @map("order_id") @db.Uuid
+  status  ShipmentStatus @default(PENDING)
+
+  warehouseId String @map("warehouse_id") @db.Uuid
+
+  // ── Carriage ────────────────────────────────────────────────────────────
+  carrierName   String? @map("carrier_name")
+  /// Lorry Receipt number — the consignment note the transporter issues.
+  lrNumber      String? @map("lr_number")
+  vehicleNumber String? @map("vehicle_number")
+  driverName    String? @map("driver_name")
+  driverPhone   String? @map("driver_phone")
+  freightAmount Decimal? @map("freight_amount") @db.Decimal(18, 4)
+
+  packedAt     DateTime? @map("packed_at") @db.Timestamptz(3)
+  dispatchedAt DateTime? @map("dispatched_at") @db.Timestamptz(3)
+  deliveredAt  DateTime? @map("delivered_at") @db.Timestamptz(3)
+
+  /// Proof of delivery — the signed document, held as a Document row.
+  podDocumentId String? @map("pod_document_id") @db.Uuid
+  podReceivedBy String? @map("pod_received_by")
+
+  notes String?
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+
+  lines ShipmentLine[]
+
+  @@index([orderId, status])
+  @@index([status, dispatchedAt(sort: Desc)])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([deletedAt])
+  @@map("shipment")
+}
+
+model ShipmentLine {
+  id          String @id @default(uuid(7)) @db.Uuid
+  shipmentId  String @map("shipment_id") @db.Uuid
+  orderLineId String @map("order_line_id") @db.Uuid
+
+  quantity Decimal @db.Decimal(18, 4)
+  /// Serials dispatched on this line, captured at dispatch (ADR-0009). Held as
+  /// an array rather than a join because they are written once and read as a
+  /// set — there is no per-serial state to track here.
+  serials  String[]
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  shipment  Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  orderLine OrderLine @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
+
+  @@unique([shipmentId, orderLineId])
+  @@index([orderLineId])
+  @@map("shipment_line")
+}
+
+/// Append-only event feed per order — the "what happened to this order" screen.
+///
+/// Distinct from `audit_log`, which is system-wide, security-oriented, and
+/// keyed by entity. This is a business narrative a salesperson reads.
+model OrderTimeline {
+  id      String @id @default(uuid(7)) @db.Uuid
+  orderId String @map("order_id") @db.Uuid
+
+  event       String
+  description String
+  metadata    Json?
+
+  actorId String? @map("actor_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt(sort: Desc)])
+  @@map("order_timeline")
 }
