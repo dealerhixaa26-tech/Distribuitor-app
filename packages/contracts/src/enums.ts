@@ -142,6 +142,7 @@ export const discountTypeSchema = asEnum(DISCOUNT_TYPES);
 
 export const WAREHOUSE_TYPES = ['COMPANY', 'DISTRIBUTOR', 'TRANSIT', 'SCRAP'] as const;
 export type WarehouseType = (typeof WAREHOUSE_TYPES)[number];
+export const warehouseTypeSchema = asEnum(WAREHOUSE_TYPES);
 
 /** Every row in the immutable stock ledger carries one of these. See ADR-0002. */
 export const STOCK_MOVEMENT_TYPES = [
@@ -155,6 +156,7 @@ export const STOCK_MOVEMENT_TYPES = [
   'SCRAP',
 ] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
+export const stockMovementTypeSchema = asEnum(STOCK_MOVEMENT_TYPES);
 
 /** Movement types that increase stock. The ledger stores signed quantities. */
 export const INBOUND_MOVEMENTS: readonly StockMovementType[] = [
@@ -164,11 +166,73 @@ export const INBOUND_MOVEMENTS: readonly StockMovementType[] = [
   'SALES_RETURN',
 ];
 
+/**
+ * Movement types that DECREASE stock. Declared alongside INBOUND_MOVEMENTS so
+ * the sign a movement carries is derived from data rather than from a
+ * conditional someone can get backwards. The database enforces the same rule
+ * (`stock_ledger_sign_matches_type` in migration 0007).
+ */
+export const OUTBOUND_MOVEMENTS: readonly StockMovementType[] = [
+  'ISSUE',
+  'TRANSFER_OUT',
+  'SCRAP',
+];
+
+/** ADJUSTMENT is the only type allowed either sign — that is what it is for. */
+export const signForMovement = (type: StockMovementType): 1 | -1 | 0 => {
+  if (INBOUND_MOVEMENTS.includes(type)) return 1;
+  if (OUTBOUND_MOVEMENTS.includes(type)) return -1;
+  return 0;
+};
+
 export const RESERVATION_STATUSES = ['ACTIVE', 'RELEASED', 'CONSUMED', 'EXPIRED'] as const;
 export type ReservationStatus = (typeof RESERVATION_STATUSES)[number];
+export const reservationStatusSchema = asEnum(RESERVATION_STATUSES);
+
+/**
+ * A reservation leaves ACTIVE exactly once, and never returns. Re-activating a
+ * consumed reservation would double-count stock that has already shipped.
+ */
+export const RESERVATION_TRANSITIONS: Readonly<
+  Record<ReservationStatus, readonly ReservationStatus[]>
+> = {
+  ACTIVE: ['RELEASED', 'CONSUMED', 'EXPIRED'],
+  RELEASED: [],
+  CONSUMED: [],
+  EXPIRED: [],
+};
+
+export const canTransitionReservation = (
+  from: ReservationStatus,
+  to: ReservationStatus,
+): boolean => RESERVATION_TRANSITIONS[from].includes(to);
 
 export const SERIAL_STATUSES = ['IN_STOCK', 'RESERVED', 'SOLD', 'RMA', 'SCRAPPED'] as const;
 export type SerialStatus = (typeof SERIAL_STATUSES)[number];
+export const serialStatusSchema = asEnum(SERIAL_STATUSES);
+
+export const TRANSFER_STATUSES = ['DRAFT', 'IN_TRANSIT', 'RECEIVED', 'CANCELLED'] as const;
+export type TransferStatus = (typeof TRANSFER_STATUSES)[number];
+export const transferStatusSchema = asEnum(TRANSFER_STATUSES);
+
+/**
+ * Two-phase by construction: stock cannot arrive without having been dispatched,
+ * so RECEIVED is only reachable from IN_TRANSIT. That is what keeps transit
+ * stock visible instead of goods appearing to vanish in the lorry.
+ */
+export const TRANSFER_TRANSITIONS: Readonly<Record<TransferStatus, readonly TransferStatus[]>> = {
+  DRAFT: ['IN_TRANSIT', 'CANCELLED'],
+  IN_TRANSIT: ['RECEIVED'],
+  RECEIVED: [],
+  CANCELLED: [],
+};
+
+export const canTransitionTransfer = (from: TransferStatus, to: TransferStatus): boolean =>
+  TRANSFER_TRANSITIONS[from].includes(to);
+
+export const STOCK_COUNT_STATUSES = ['DRAFT', 'COUNTING', 'POSTED', 'CANCELLED'] as const;
+export type StockCountStatus = (typeof STOCK_COUNT_STATUSES)[number];
+export const stockCountStatusSchema = asEnum(STOCK_COUNT_STATUSES);
 
 // ── Sales ───────────────────────────────────────────────────────────────────
 

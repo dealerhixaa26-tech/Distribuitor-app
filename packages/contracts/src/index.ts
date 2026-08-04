@@ -28,3 +28,5 @@ export * from './channel/distributor.schema';
 export * from './catalog/category.schema';
 export * from './catalog/product.schema';
 export * from './catalog/pricing.schema';
+export * from './inventory/warehouse.schema';
+export * from './inventory/stock.schema';

@@ -865,8 +865,9 @@ model Warehouse {
   addressId   String? @map("address_id") @db.Uuid
   territoryId String? @map("territory_id") @db.Uuid
 
-  /// Set when type = DISTRIBUTOR. The FK arrives with the Distributor model in
-  /// Phase 5; kept as a plain column now so no migration is needed then.
+  /// Set when type = DISTRIBUTOR. Phase 3 left this a plain column because the
+  /// Distributor model did not exist yet; Phase 6 closed the seam and it is now
+  /// a real FK.
   distributorId String? @map("distributor_id") @db.Uuid
 
   isDefault Boolean @default(false) @map("is_default")
@@ -877,8 +878,19 @@ model Warehouse {
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
   createdById String?   @map("created_by_id") @db.Uuid
 
-  address   Address?   @relation(fields: [addressId], references: [id])
-  territory Territory? @relation(fields: [territoryId], references: [id])
+  address     Address?     @relation(fields: [addressId], references: [id])
+  territory   Territory?   @relation(fields: [territoryId], references: [id])
+  distributor Distributor? @relation(fields: [distributorId], references: [id], onDelete: Restrict)
+
+  // ── Inventory (Phase 6) ─────────────────────────────────────────────────
+  ledgerEntries     StockLedgerEntry[]
+  balances          StockBalance[]
+  reservations      StockReservation[]
+  serials           SerialNumber[]
+  transfersOut      StockTransfer[]    @relation("TransferSource")
+  transfersIn       StockTransfer[]    @relation("TransferDestination")
+  inventorySettings InventorySetting[]
+  stockCounts       StockCount[]
 
   @@index([type, isActive])
   @@index([territoryId])
@@ -1012,6 +1024,9 @@ model Distributor {
   agreements Agreement[]
   /// The authorized catalog — which products this partner may buy (Phase 4).
   authorizedProducts DistributorProduct[]
+  /// Distributor-owned warehouses, and the serials shipped to this partner.
+  warehouses         Warehouse[]
+  serials            SerialNumber[]
 
   @@index([status, territoryId])
   @@index([priceListId])
@@ -1336,6 +1351,16 @@ model Product {
   priceListItems PriceListItem[]
   authorizedFor  DistributorProduct[]
 
+  // ── Inventory (Phase 6) ─────────────────────────────────────────────────
+  batches           Batch[]
+  ledgerEntries     StockLedgerEntry[]
+  balances          StockBalance[]
+  reservations      StockReservation[]
+  serials           SerialNumber[]
+  transferLines     StockTransferLine[]
+  inventorySettings InventorySetting[]
+  stockCountLines   StockCountLine[]
+
   @@index([categoryId, status])
   @@index([brandId])
   @@index([type, status])
@@ -1343,6 +1368,15 @@ model Product {
   @@index([hsnCode])
   @@index([sacCode])
   @@index([deletedAt])
+
+  // Declared HERE rather than only in raw SQL. An index Prisma does not know
+  // about is one the next `migrate dev` diff proposes DROPPING — it compares
+  // the whole database against this file. Partial indexes escape that (Prisma
+  // skips what it cannot model), which is why migration 0002's survived and
+  // these three would not have. See HANDOFF §4.13.
+  @@index([searchVector(ops: raw("tsvector_ops"))], type: Gin, map: "product_search_vector_idx")
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "product_name_trgm_idx")
+  @@index([sku(ops: raw("gin_trgm_ops"))], type: Gin, map: "product_sku_trgm_idx")
   @@map("product")
 }
 
@@ -1366,6 +1400,13 @@ model ProductVariant {
 
   product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
   priceListItems PriceListItem[]
+
+  // ── Inventory (Phase 6) ─────────────────────────────────────────────────
+  ledgerEntries   StockLedgerEntry[]
+  balances        StockBalance[]
+  reservations    StockReservation[]
+  transferLines   StockTransferLine[]
+  stockCountLines StockCountLine[]
 
   @@index([productId, isActive])
   @@index([deletedAt])
@@ -1658,4 +1699,386 @@ model DistributorProduct {
   @@index([productId])
   @@index([deletedAt])
   @@map("distributor_product")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// INVENTORY (Phase 6)
+//
+// A LEDGER plus a DERIVED BALANCE, never a mutable counter. See ADR-0002.
+//
+// The rule that governs every model below: `stock_ledger_entry` is the source of
+// truth and is append-only; `stock_balance` is a read-model maintained in the
+// SAME transaction under `SELECT ... FOR UPDATE`. Nothing outside
+// StockLedgerService.move() may write either table. See docs/19 §3.
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum StockMovementType {
+  OPENING
+  RECEIPT
+  ISSUE
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADJUSTMENT
+  SALES_RETURN
+  SCRAP
+}
+
+enum ReservationStatus {
+  ACTIVE
+  RELEASED
+  CONSUMED
+  EXPIRED
+}
+
+enum SerialStatus {
+  IN_STOCK
+  RESERVED
+  SOLD
+  RMA
+  SCRAPPED
+}
+
+enum TransferStatus {
+  DRAFT
+  IN_TRANSIT
+  RECEIVED
+  CANCELLED
+}
+
+enum StockCountStatus {
+  DRAFT
+  COUNTING
+  POSTED
+  CANCELLED
+}
+
+/// Manufacturing lot. Only meaningful for products with `isBatchTracked`.
+model Batch {
+  id        String @id @default(uuid(7)) @db.Uuid
+  productId String @map("product_id") @db.Uuid
+  lotNumber String @map("lot_number")
+
+  manufacturedOn DateTime? @map("manufactured_on") @db.Date
+  expiresOn      DateTime? @map("expires_on") @db.Date
+  notes          String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  product       Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  ledgerEntries StockLedgerEntry[]
+  balances      StockBalance[]
+
+  @@unique([productId, lotNumber])
+  @@index([expiresOn])
+  @@map("batch")
+}
+
+/// The immutable, append-only record of every stock movement.
+///
+/// THE SOURCE OF TRUTH. "Why is stock 47?" is answered by reading this table,
+/// not by guessing. Adjustments are new compensating rows, never edits — which
+/// is why there is no `deletedAt` and no `updatedAt` here, and why a database
+/// trigger blocks UPDATE and DELETE outright (migration 0007).
+model StockLedgerEntry {
+  id          String @id @default(uuid(7)) @db.Uuid
+  warehouseId String @map("warehouse_id") @db.Uuid
+  productId   String @map("product_id") @db.Uuid
+  variantId   String? @map("variant_id") @db.Uuid
+  batchId     String? @map("batch_id") @db.Uuid
+
+  movementType StockMovementType @map("movement_type")
+
+  /// SIGNED: positive in, negative out. Storing the sign rather than a separate
+  /// direction column means a balance is a plain SUM() and cannot be summed
+  /// wrongly.
+  quantity Decimal @db.Decimal(18, 4)
+
+  /// The cost per unit AT THIS MOMENT. Held per row so a restated running
+  /// average can never rewrite history — COGS for a past period is read from
+  /// here, not recomputed from today's average. See ADR-0010 §3.
+  unitCost Decimal @default(0) @map("unit_cost") @db.Decimal(18, 4)
+
+  /// What caused the movement: ORDER, SHIPMENT, TRANSFER, ADJUSTMENT, COUNT.
+  /// Deliberately polymorphic — the ledger must not grow a foreign key every
+  /// time a new document type can move stock.
+  refType String? @map("ref_type")
+  refId   String? @map("ref_id") @db.Uuid
+  /// Mandatory on ADJUSTMENT and SCRAP: an unexplained stock change is
+  /// indistinguishable from theft.
+  reason  String?
+
+  /// When the movement physically happened, which is not always when it was
+  /// recorded — a backdated goods receipt is a real thing.
+  occurredAt  DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdById String?  @map("created_by_id") @db.Uuid
+
+  warehouse Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  batch     Batch?          @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  @@index([warehouseId, productId, occurredAt(sort: Desc)])
+  @@index([productId, occurredAt(sort: Desc)])
+  @@index([refType, refId])
+  @@index([occurredAt(sort: Desc), id(sort: Desc)])
+  @@map("stock_ledger_entry")
+}
+
+/// The derived read-model. NEVER written except by StockLedgerService.move().
+///
+/// Exists because `SUM()` over millions of ledger rows on every product page is
+/// not viable at the stated scale. Its correctness is guaranteed by being
+/// written in the same transaction as the ledger row, under a row lock, and
+/// re-derived nightly by the reconciliation job.
+model StockBalance {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  warehouseId String  @map("warehouse_id") @db.Uuid
+  productId   String  @map("product_id") @db.Uuid
+  variantId   String? @map("variant_id") @db.Uuid
+  batchId     String? @map("batch_id") @db.Uuid
+
+  quantityOnHand   Decimal @default(0) @map("quantity_on_hand") @db.Decimal(18, 4)
+  /// Committed to an approved order but not yet physically issued. Reserved
+  /// stock is still ON HAND — it has not moved anywhere.
+  quantityReserved Decimal @default(0) @map("quantity_reserved") @db.Decimal(18, 4)
+
+  /// `on_hand - reserved`, a GENERATED column created in migration 0007.
+  /// Generated rather than maintained: a derived value that can be written to
+  /// will eventually be written to incorrectly.
+  quantityAvailable Decimal? @map("quantity_available") @db.Decimal(18, 4)
+
+  /// Moving weighted average, recomputed on inbound movements only (ADR-0010).
+  averageCost Decimal @default(0) @map("average_cost") @db.Decimal(18, 4)
+
+  lastMovementAt DateTime? @map("last_movement_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  warehouse Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  batch     Batch?          @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  /// Uniqueness is enforced by PARTIAL indexes in migration 0007 — `variant_id`
+  /// and `batch_id` are nullable, and Postgres treats NULLs as distinct, so a
+  /// plain unique would permit duplicate balance rows for the same product.
+  /// Two balance rows for one product is silent, permanent corruption.
+  @@index([warehouseId, productId])
+  @@index([productId])
+  /// Declared here, not only in raw SQL — see the Product model's note and
+  /// HANDOFF §4.13. Drives the low-stock query.
+  @@index([productId, quantityAvailable])
+  @@map("stock_balance")
+}
+
+/// Stock committed to an approved order but not yet issued.
+///
+/// Phase 7 owns the triggers (approve → reserve, cancel → release, dispatch →
+/// consume); Phase 6 owns the operations and their correctness.
+model StockReservation {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  warehouseId String  @map("warehouse_id") @db.Uuid
+  productId   String  @map("product_id") @db.Uuid
+  variantId   String? @map("variant_id") @db.Uuid
+
+  /// The order this is held for. A plain column until Order arrives in Phase 7 —
+  /// the same seam pattern used for priceListId and distributorId before it.
+  orderId String? @map("order_id") @db.Uuid
+
+  quantity Decimal           @db.Decimal(18, 4)
+  status   ReservationStatus @default(ACTIVE)
+
+  /// Stale reservations are expired by the maintenance job so stock does not
+  /// stay locked behind an order nobody is progressing.
+  expiresAt  DateTime? @map("expires_at") @db.Timestamptz(3)
+  releasedAt DateTime? @map("released_at") @db.Timestamptz(3)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+  notes      String?
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById String?  @map("created_by_id") @db.Uuid
+
+  warehouse Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([warehouseId, productId, status])
+  @@index([orderId])
+  @@index([status, expiresAt])
+  @@map("stock_reservation")
+}
+
+/// A physical unit's identity, created AT DISPATCH. See ADR-0009.
+///
+/// The liability object: given a serial, we can name the distributor, the
+/// customer, the dispatch date, and the warranty expiry. That is what a field
+/// incident on a confined-space safety device actually needs.
+model SerialNumber {
+  id        String @id @default(uuid(7)) @db.Uuid
+  productId String @map("product_id") @db.Uuid
+  serial    String @unique
+
+  status SerialStatus @default(SOLD)
+
+  /// Null once dispatched — the unit is no longer in a Hixaa warehouse.
+  warehouseId String? @map("warehouse_id") @db.Uuid
+  batchId     String? @map("batch_id") @db.Uuid
+
+  currentDistributorId String? @map("current_distributor_id") @db.Uuid
+  /// Set when the distributor reports the sell-out (Phase 7).
+  currentCustomerId    String? @map("current_customer_id") @db.Uuid
+
+  /// Opened at DISPATCH, not at receipt: a buyer's warranty should not be
+  /// eroded by however long the unit sat on Hixaa's shelf.
+  warrantyStart DateTime? @map("warranty_start") @db.Date
+  warrantyEnd   DateTime? @map("warranty_end") @db.Date
+
+  dispatchedAt DateTime? @map("dispatched_at") @db.Timestamptz(3)
+  notes        String?
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById String?  @map("created_by_id") @db.Uuid
+
+  product            Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
+  warehouse          Warehouse?   @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  currentDistributor Distributor? @relation(fields: [currentDistributorId], references: [id], onDelete: Restrict)
+
+  @@index([productId, status])
+  @@index([currentDistributorId])
+  @@index([warrantyEnd])
+  @@map("serial_number")
+}
+
+/// Movement between warehouses, in two phases.
+///
+/// Stock sits in a TRANSIT warehouse between dispatch and receipt so it is
+/// VISIBLE rather than missing. A single-phase transfer makes goods vanish for
+/// however long the lorry takes, and every such gap gets reported as a bug.
+model StockTransfer {
+  id     String         @id @default(uuid(7)) @db.Uuid
+  code   String         @unique
+  status TransferStatus @default(DRAFT)
+
+  sourceWarehouseId      String @map("source_warehouse_id") @db.Uuid
+  destinationWarehouseId String @map("destination_warehouse_id") @db.Uuid
+  /// Where stock rests in between. Null falls back to the source, which keeps
+  /// the transfer usable before a TRANSIT warehouse has been configured.
+  transitWarehouseId     String? @map("transit_warehouse_id") @db.Uuid
+
+  dispatchedAt DateTime? @map("dispatched_at") @db.Timestamptz(3)
+  receivedAt   DateTime? @map("received_at") @db.Timestamptz(3)
+  notes        String?
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+
+  source      Warehouse @relation("TransferSource", fields: [sourceWarehouseId], references: [id], onDelete: Restrict)
+  destination Warehouse @relation("TransferDestination", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
+  lines       StockTransferLine[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([sourceWarehouseId])
+  @@index([deletedAt])
+  @@map("stock_transfer")
+}
+
+model StockTransferLine {
+  id         String  @id @default(uuid(7)) @db.Uuid
+  transferId String  @map("transfer_id") @db.Uuid
+  productId  String  @map("product_id") @db.Uuid
+  variantId  String? @map("variant_id") @db.Uuid
+
+  quantity Decimal @db.Decimal(18, 4)
+  /// Short receipts are normal — damage, miscount. Recorded rather than
+  /// silently reconciled, so the difference is investigable.
+  quantityReceived Decimal? @map("quantity_received") @db.Decimal(18, 4)
+  notes            String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  transfer StockTransfer   @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  product  Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant  ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@unique([transferId, productId, variantId])
+  @@index([productId])
+  @@map("stock_transfer_line")
+}
+
+/// Per-warehouse reorder policy. Drives the low-stock alert.
+model InventorySetting {
+  id          String @id @default(uuid(7)) @db.Uuid
+  productId   String @map("product_id") @db.Uuid
+  warehouseId String @map("warehouse_id") @db.Uuid
+
+  reorderLevel    Decimal @default(0) @map("reorder_level") @db.Decimal(18, 4)
+  reorderQuantity Decimal @default(0) @map("reorder_quantity") @db.Decimal(18, 4)
+  maxLevel        Decimal? @map("max_level") @db.Decimal(18, 4)
+  alertEnabled    Boolean @default(true) @map("alert_enabled")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, warehouseId])
+  @@index([warehouseId, alertEnabled])
+  @@map("inventory_setting")
+}
+
+/// A physical stock take. Variances post as ADJUSTMENT movements through the
+/// same `move()` path as everything else, so a count cannot bypass the ledger.
+model StockCount {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  code        String           @unique
+  warehouseId String           @map("warehouse_id") @db.Uuid
+  status      StockCountStatus @default(DRAFT)
+
+  countedOn DateTime  @map("counted_on") @db.Date
+  postedAt  DateTime? @map("posted_at") @db.Timestamptz(3)
+  notes     String?
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+  postedById  String?   @map("posted_by_id") @db.Uuid
+
+  warehouse Warehouse        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  lines     StockCountLine[]
+
+  @@index([warehouseId, status])
+  @@index([deletedAt])
+  @@map("stock_count")
+}
+
+model StockCountLine {
+  id           String  @id @default(uuid(7)) @db.Uuid
+  stockCountId String  @map("stock_count_id") @db.Uuid
+  productId    String  @map("product_id") @db.Uuid
+  variantId    String? @map("variant_id") @db.Uuid
+
+  /// What the system believed at the moment the count sheet was generated.
+  systemQuantity  Decimal  @map("system_quantity") @db.Decimal(18, 4)
+  /// What was physically found. Null until counted.
+  countedQuantity Decimal? @map("counted_quantity") @db.Decimal(18, 4)
+  reason          String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  stockCount StockCount      @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  product    Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant    ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@unique([stockCountId, productId, variantId])
+  @@map("stock_count_line")
 }

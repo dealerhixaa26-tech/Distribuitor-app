@@ -1,7 +1,7 @@
 # HANDOFF — Hixaa DMS
 
 > Everything a new session needs to continue this build without re-deriving it.
-> Last updated at the end of Phase 4. Read this before touching code.
+> Last updated at the end of Phase 6. Read this before touching code.
 
 ---
 
@@ -30,7 +30,7 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
 | **Branch** | `main` — clean, pushed, at `7cf5393` |
-| **Size** | ~26,600 source lines · 50 tables · 6 migrations · 112 endpoints · 232 tests |
+| **Size** | ~31,300 source lines · 60 tables · 7 migrations · ~150 endpoints · 260 tests |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
 
 ### Phase status
@@ -41,11 +41,13 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | 2 — Identity & Access | ✅ Complete — `docs/14-phase-2-completion.md` |
 | 3 — Master Data | ✅ Complete — `docs/15-phase-3-progress.md` |
 | 4 — Catalog & Pricing | ✅ Complete — `docs/18-phase-4-completion.md` |
+| 6 — Inventory | ✅ Complete — `docs/20-phase-6-completion.md` |
 | 5 — Distributors | ✅ Complete — `docs/16-phase-5-completion.md` |
 | 6–11 | Not started — see `docs/05-roadmap.md` |
 
-**Phase 6 (Inventory) is now the critical path.** Phase 4 closed both seams Phase 5 left open:
-`Distributor.priceListId` is a real FK, and `DistributorProduct` is the authorized catalog.
+**Phase 7 (Sales) is now the critical path** — quotations and orders. Every seam is closed:
+`Distributor.priceListId`, `DistributorProduct`, and `Warehouse.distributorId` are all real FKs.
+Phase 7 wires the pricing engine and the stock ledger together into an order.
 
 ---
 
@@ -71,9 +73,15 @@ pnpm verify                         # the gate: lint + typecheck + tests + build
 |---|---|---|
 | `admin@hixaa.com` | `ChangeMe!Now#2026` | SUPER_ADMIN, GLOBAL |
 | `west.manager@hixaa.test` | `vidarbha-automation-2026` | SALES_MANAGER, scoped to WEST zone |
-| `support@hixaa.test` | `correct-horse-battery-staple` | SUPPORT_AGENT, 12 permissions |
+| `support@hixaa.test` | `correct-horse-battery-staple` | SUPPORT_AGENT, global but low-permission |
+| `west.storekeeper@hixaa.test` | `storekeeper-nagpur-2026` | INVENTORY_MANAGER, scoped to WEST zone |
 
-The two non-admin accounts exist specifically to **test denial**. Use them.
+The three non-admin accounts exist specifically to **test denial**, and are now seeded by
+`prisma/seed/dev-users.seed.ts` (skipped in production) rather than living in one database.
+
+⚠️ **Use `west.storekeeper` for WRITE-scope tests, not `west.manager`.** `west.manager` holds
+read-only inventory permissions, so an out-of-scope write returns 403 on PERMISSION grounds and
+tells you nothing about scoping. That blind spot hid a real bug for two phases — see §4.14.
 
 > ⚠️ **dotenv strips `#` and everything after it in an unquoted value.** `pass#2026` silently
 > becomes `pass`. Always quote secrets containing `#`. This cost a debugging round already.
@@ -147,6 +155,38 @@ to say which is right. Phases 7 and 8 must call the engine.
 
 ---
 
+### 4.13 Prisma will propose DROPPING raw SQL objects it does not know about
+`migrate dev` diffs the whole database against `schema.prisma`. A **non-partial** index created in
+raw SQL, or a GENERATED column, shows up as drift and the generated migration will try to remove
+it. Partial indexes escape this (Prisma skips what it cannot model), which is why migration 0002's
+survived and Phase 4's three product search indexes would have been destroyed by migration 0007.
+
+Two rules follow:
+- **Declare raw indexes in `schema.prisma`** — `@@index([col(ops: raw("gin_trgm_ops"))], type: Gin,
+  map: "…")`. Then Prisma knows about them and stops proposing the drop.
+- **Do not use GENERATED columns.** Use a BEFORE trigger instead. Behaviourally identical, and the
+  column looks ordinary to the ORM. `product.search_vector` and `stock_balance.quantity_available`
+  are both trigger-maintained for this reason (migration 0007).
+
+After every migration, run `prisma migrate diff --from-migrations … --to-schema-datamodel …` and
+confirm it says *"This is an empty migration."* Anything else is drift that will bite the next phase.
+
+### 4.14 A write-scope test needs an account that is scoped AND has the permission
+`west.manager` is territory-scoped but read-only on inventory, so every out-of-scope write returns
+**403 on permission grounds** — which says nothing about whether row scoping guards writes. The two
+controls are independent, and this blind spot hid a genuine bug for two phases: the scope extension
+composed `update`/`delete` predicates into a shape Prisma rejects, so every scoped update 500'd for
+a non-global caller (including editing a distributor, since Phase 5).
+
+Use **`west.storekeeper@hixaa.test`** — scoped AND holding write permissions — so a refusal is
+unambiguously a scope refusal. Seed an account of that shape for every new scoped module.
+
+### 4.15 Stock is written in exactly ONE place
+`StockLedgerService.move()` (ADR-0002). It takes `SELECT … FOR UPDATE` on the balance row BEFORE
+reading the quantity — check-then-lock is the classic oversell bug and it reviews as correct. Never
+write `stock_ledger_entry` or `stock_balance` from anywhere else; the ledger is append-only and a
+database trigger will reject an UPDATE or DELETE regardless.
+
 ## 5. Architecture in one screen
 
 ```
@@ -172,34 +212,46 @@ Six ADRs in `docs/adr/`. The ones that constrain daily work:
   discounts never stack; a manual override is an audited input, not a bypass.
 - **0008** Price lists are GST-EXCLUSIVE. Tax is derived forward, never backed out. `TaxRate` is
   date-effective and authoritative; `Product.gstRate` is a display snapshot only.
+- **0009** Serial numbers are captured at DISPATCH, not receipt. A unit in stock is fungible; its
+  identity is established when the warranty obligation attaches.
+- **0010** Moving weighted-average costing, held on `stock_balance.averageCost`. Outbound movements
+  never change it. Every ledger row stores the cost used at that moment, so history is never
+  restated.
 
 ### Scoped entities so far
 `SCOPE_REGISTRY` in `infrastructure/database/scope-registry.ts`:
 `territory` (self, subtree-expanded), `warehouse`, `distributor` (by territory),
-`distributorProduct` (via distributor). Commented-out entries mark where Phases 7–8 plug in.
+`distributorProduct` (via distributor), and the Phase 6 inventory models —
+`stockBalance`, `stockLedgerEntry`, `stockReservation`, `inventorySetting`, `stockCount`
+(all via warehouse), plus `serialNumber` (by distributor, because a dispatched serial has no
+warehouse). Commented-out entries mark where Phases 7–8 plug in.
 
 The rest of the catalog — products, categories, price lists, discount rules, tax rates — is
 company-wide reference data and deliberately NOT scoped.
 
 ---
 
-## 6. What Phase 6 must deliver
+## 6. What Phase 7 must deliver
 
-From `docs/05-roadmap.md` §Phase 6, and see ADR-0002 — inventory is a **ledger plus a derived
-balance, never a mutable counter**.
+From `docs/05-roadmap.md` §Phase 7. This is where the two engines built in Phases 4 and 6 meet.
 
-1. **Stock ledger** — append-only, signed quantities, one row per movement.
-2. **Stock balance** — a derived read-model maintained in the same transaction, with
-   `CHECK (quantity_on_hand >= 0)` as the last line of defence.
-3. **Reservations** — stock committed to an approved order but not yet issued.
-4. **Serial and batch tracking** — `Product.isSerialized` already drives this; a Raksha gateway in
-   a confined space is a warranty and liability object.
-5. **Transfers, adjustments, cycle counts.**
+1. **Customers** — the end-customer domain (plants, mines, government bodies), with `Industry`
+   already seeded as real rows.
+2. **Quotations** — RFQ-first, which is how Hixaa's sales motion actually begins.
+3. **Orders** — `PRIMARY` (sell-in) and `SECONDARY` (sell-out), with the state machine already
+   declared as data in `ORDER_TRANSITIONS`.
+4. **Credit check and discount approval** — `Role.maxDiscountPercent` and `maxOrderValue` exist and
+   the pricing engine already FLAGS `requiresApproval`; Phase 7 is what blocks on it.
+5. **Shipments** — consume reservations, issue stock, capture serials at dispatch.
 
-Reusable, already built: `ProductRelationsService.explode()` (reserve against an exploded kit),
-`NumberSequenceService`, `keysetWhere`/`toListResult`/`parseSort`, `Money`, `DataTable`.
+**Do not reimplement pricing or stock.** Call `PricingService.quote()` (ADR-0007) and
+`StockLedgerService.move()` / `ReservationsService` (ADR-0002). Both are exported for this.
 
-Register `stockLedgerEntry` / `stockBalance` in `SCOPE_REGISTRY` via warehouse, and prove refusal.
+Register `order`, `quotation`, `shipment` (via distributor) and `customer` (by territory) in
+`SCOPE_REGISTRY` — the commented-out entries are already there — and prove refusal with
+`west.storekeeper`, not `west.manager` (§4.14).
+
+Add the FK from `StockReservation.orderId` to `Order`, the last open seam.
 
 ## 7. Open questions for the user
 
@@ -209,7 +261,7 @@ Still unanswered from `docs/12-recommendations.md` §E:
 |---|---|---|
 | E1 | Hixaa's **real GSTIN, PAN, CIN** | **Phase 8 invoicing** — `company.statutory.verified` is `false` and invoicing must refuse to issue while it is |
 | E2 | Invoice number format the CA expects | Phase 8 |
-| E3 | Warehouse list (how many, where) | **Phase 6 — now the critical path, ask before building** |
+| ~~E3~~ | ~~Warehouse list~~ | **ANSWERED**: one, at Nagpur. Seeded as `WH-NGP` |
 | E4 | Real territory structure | Seeded 5 zones as a guess; editable |
 | E5 | Hostinger VPS plan; is Docker installed | Phase 11 |
 | ~~E8~~ | ~~Existing product/price data~~ | **ANSWERED**: none to import; catalog seeded from the portfolio, pricing made situational |
