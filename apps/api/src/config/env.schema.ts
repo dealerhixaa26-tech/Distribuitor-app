@@ -55,6 +55,10 @@ export const envSchema = z
     REDIS_URL: z.string().url().startsWith('redis'),
     QUEUE_PREFIX: z.string().default('hixaa'),
     QUEUE_CONCURRENCY: positiveInt.default(5),
+    /// Waiting-job count above which a queue backlog raises an ops alert. A
+    /// setting rather than a constant because the right number depends on how
+    /// much this deployment actually pushes through the queues.
+    QUEUE_DEPTH_ALERT_THRESHOLD: positiveInt.default(500),
     WORKER_ENABLED: bool.default('true'),
     OUTBOX_POLL_INTERVAL_MS: positiveInt.default(1000),
     OUTBOX_BATCH_SIZE: positiveInt.default(50),
@@ -188,6 +192,23 @@ export const envSchema = z
       }
       if (env.MAIL_BUSINESS_DRIVER === 'smtp' && !env.MAIL_BUSINESS_PASSWORD) {
         fail('MAIL_BUSINESS_PASSWORD', 'Business SMTP credentials are required in production');
+      }
+      /*
+       * ADR-0022. A production deployment with no ops recipient is a system
+       * that cannot tell you anything is wrong: queue backlogs, dead letters,
+       * failed backups, health-check failures and token-reuse alerts all route
+       * here. Every one of them would be recorded as UNDELIVERABLE and read by
+       * nobody.
+       *
+       * This refuses at BOOT, in the manner of the ClamAV and S3 drivers, so
+       * the misconfiguration surfaces when it is introduced rather than during
+       * the incident it was supposed to warn about.
+       */
+      if (!env.MAIL_OPS_TO) {
+        fail('MAIL_OPS_TO', 'An ops alert recipient is required in production (ADR-0022)');
+      }
+      if (env.MAIL_OPS_DRIVER === 'smtp' && !env.MAIL_OPS_PASSWORD) {
+        fail('MAIL_OPS_PASSWORD', 'Ops SMTP credentials are required in production');
       }
       if (env.CORS_ORIGINS.some((o) => o.includes('localhost'))) {
         fail('CORS_ORIGINS', 'localhost must not be an allowed origin in production');

@@ -1,7 +1,7 @@
 import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { QUEUE_NAMES } from '@hixaa/contracts';
+import { QUEUE_NAMES, type QueueName } from '@hixaa/contracts';
 import type { Job, Queue } from 'bullmq';
 import { PinoLogger } from 'nestjs-pino';
 import { AppConfigService } from '../config/app-config.service';
@@ -9,8 +9,6 @@ import { PrismaService } from '../infrastructure/database/prisma.service';
 import { MailService } from '../infrastructure/mail/mail.service';
 import { OutboxDispatcherService } from '../infrastructure/outbox/outbox-dispatcher.service';
 
-/** Depth above which a queue backlog is treated as a problem worth an alert. */
-const QUEUE_DEPTH_ALERT_THRESHOLD = 500;
 
 /**
  * Housekeeping and self-monitoring.
@@ -22,16 +20,30 @@ const QUEUE_DEPTH_ALERT_THRESHOLD = 500;
 @Injectable()
 @Processor(QUEUE_NAMES.MAINTENANCE)
 export class MaintenanceProcessor extends WorkerHost {
+  /** Every queue, so monitoring covers all five rather than only email. */
+  private readonly queues: Record<QueueName, Queue>;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
     private readonly config: AppConfigService,
     private readonly dispatcher: OutboxDispatcherService,
     private readonly logger: PinoLogger,
-    @InjectQueue(QUEUE_NAMES.EMAIL) private readonly emailQueue: Queue,
+    @InjectQueue(QUEUE_NAMES.EMAIL) email: Queue,
+    @InjectQueue(QUEUE_NAMES.NOTIFICATIONS) notifications: Queue,
+    @InjectQueue(QUEUE_NAMES.SHEETS_SYNC) sheets: Queue,
+    @InjectQueue(QUEUE_NAMES.REPORTS) reports: Queue,
+    @InjectQueue(QUEUE_NAMES.MAINTENANCE) maintenance: Queue,
   ) {
     super();
     this.logger.setContext(MaintenanceProcessor.name);
+    this.queues = {
+      [QUEUE_NAMES.EMAIL]: email,
+      [QUEUE_NAMES.NOTIFICATIONS]: notifications,
+      [QUEUE_NAMES.SHEETS_SYNC]: sheets,
+      [QUEUE_NAMES.REPORTS]: reports,
+      [QUEUE_NAMES.MAINTENANCE]: maintenance,
+    };
   }
 
   async process(job: Job): Promise<void> {
@@ -51,26 +63,41 @@ export class MaintenanceProcessor extends WorkerHost {
     });
   }
 
-  /** Alerts on queue backlog and dead letters. */
+  /**
+   * Alerts on queue backlog and dead letters, across EVERY queue.
+   *
+   * This watched the email queue alone — one of five. A stalled
+   * `notifications`, `reports`, `sheets-sync` or `maintenance` queue was
+   * invisible, which for `sheets-sync` would have meant a backup queue silently
+   * filling up while the thing meant to notice it looked elsewhere.
+   *
+   * Each queue is checked independently so one unreachable queue does not
+   * suppress the alert for the other four.
+   */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async monitorQueues(): Promise<void> {
     if (!this.config.queue.workerEnabled) return;
 
-    try {
-      const [waiting, failed] = await Promise.all([
-        this.emailQueue.getWaitingCount(),
-        this.emailQueue.getFailedCount(),
-      ]);
+    const threshold = this.config.queue.depthAlertThreshold;
 
-      if (waiting > QUEUE_DEPTH_ALERT_THRESHOLD || failed > 0) {
-        await this.mail.sendOps('queue-alert', {
-          queue: QUEUE_NAMES.EMAIL,
-          depth: waiting,
-          deadLetterCount: failed,
-        });
+    for (const [name, queue] of Object.entries(this.queues)) {
+      try {
+        const [waiting, failed] = await Promise.all([
+          queue.getWaitingCount(),
+          queue.getFailedCount(),
+        ]);
+
+        if (waiting > threshold || failed > 0) {
+          this.logger.warn({ queue: name, waiting, failed }, 'Queue backlog or dead letters');
+          await this.mail.sendOps('queue-alert', {
+            queue: name,
+            depth: waiting,
+            deadLetterCount: failed,
+          });
+        }
+      } catch (error) {
+        this.logger.error({ err: error, queue: name }, 'Queue monitoring failed for this queue');
       }
-    } catch (error) {
-      this.logger.error({ err: error }, 'Queue monitoring failed');
     }
   }
 

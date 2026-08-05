@@ -67,6 +67,9 @@ describe('environment validation', () => {
       CORS_ORIGINS: 'https://dms.hixaa.com',
       FEATURE_SWAGGER: 'false',
       MAIL_BUSINESS_DRIVER: 'log',
+      // ADR-0022: production must have somewhere to send an ops alert.
+      MAIL_OPS_DRIVER: 'log',
+      MAIL_OPS_TO: 'hixaa.ops@gmail.com',
     };
 
     it('accepts a well-formed production configuration', () => {
@@ -101,6 +104,31 @@ describe('environment validation', () => {
       expect(() =>
         validateEnv({ ...productionEnv, MAIL_BUSINESS_DRIVER: 'smtp', MAIL_BUSINESS_PASSWORD: '' }),
       ).toThrow(/MAIL_BUSINESS_PASSWORD/);
+    });
+
+    /*
+     * ADR-0022. A production deployment with no ops recipient cannot tell you
+     * anything is wrong — queue backlogs, dead letters, failed backups, health
+     * failures and token-reuse alerts all route there and would be recorded as
+     * UNDELIVERABLE and read by nobody.
+     *
+     * Development deliberately still boots without one, because a developer
+     * without a Gmail app password must be able to run the whole system.
+     */
+    it('refuses to boot in production with no ops alert recipient', () => {
+      expect(() => validateEnv({ ...productionEnv, MAIL_OPS_TO: '' })).toThrow(/MAIL_OPS_TO/);
+    });
+
+    it('requires ops SMTP credentials when the ops smtp driver is selected', () => {
+      expect(() =>
+        validateEnv({ ...productionEnv, MAIL_OPS_DRIVER: 'smtp', MAIL_OPS_PASSWORD: '' }),
+      ).toThrow(/MAIL_OPS_PASSWORD/);
+    });
+
+    it('still allows development to run with no ops recipient', () => {
+      // The guard is production-only on purpose: making it universal would stop
+      // every developer without a Gmail app password from booting at all.
+      expect(() => validateEnv({ ...baseEnv, MAIL_OPS_TO: '' })).not.toThrow();
     });
   });
 

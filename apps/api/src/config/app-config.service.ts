@@ -60,6 +60,7 @@ export class AppConfigService {
       prefix: this.get('QUEUE_PREFIX'),
       concurrency: this.get('QUEUE_CONCURRENCY'),
       workerEnabled: this.get('WORKER_ENABLED'),
+      depthAlertThreshold: this.get('QUEUE_DEPTH_ALERT_THRESHOLD'),
     };
   }
 
