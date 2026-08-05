@@ -21,6 +21,26 @@ export interface BusinessTemplateData {
   'password-changed': { name: string; changedAt: string; ipAddress?: string };
   'user-invited': { name: string; inviterName: string; acceptUrl: string; roleName: string };
   'account-locked': { name: string; unlockAt: string; attempts: number };
+
+  // ── Documents that travel with a PDF ──────────────────────────────────────
+  // Money is a preformatted STRING here, never a number (ADR-0004). The caller
+  // has already resolved and formatted it; a template must not do arithmetic on
+  // a figure a partner will treat as a commitment.
+  'quotation-sent': {
+    name: string;
+    quotationNumber: string;
+    validUntil: string;
+    totalFormatted: string;
+  };
+  'invoice-issued': {
+    name: string;
+    invoiceNumber: string;
+    invoiceDate: string;
+    dueDate: string;
+    totalFormatted: string;
+  };
+  'distributor-approved': { name: string; code: string; loginUrl: string };
+  'report-ready': { name: string; reportName: string; generatedAt: string; rowCount: number };
 }
 
 export type BusinessTemplate = keyof BusinessTemplateData;
@@ -53,6 +73,18 @@ export interface OpsTemplateData {
   'queue-alert': { queue: string; depth: number; deadLetterCount: number };
   'sheets-sync-failed': { entity: string; rowsProcessed: number; error: string };
   'error-spike': { count: number; windowMinutes: number; topError: string };
+  /**
+   * The ledger and the derived balances disagree (ADR-0002). This is an
+   * operator emergency and deliberately NOT a business template: it says
+   * nothing a partner should see, and it needs to reach someone who can stop
+   * stock moving on numbers that are wrong.
+   */
+  'reconciliation-drift': {
+    quantityDrifts: number;
+    reservationDrifts: number;
+    checked: number;
+    firstSku?: string;
+  };
 }
 
 export type OpsTemplate = keyof OpsTemplateData;
@@ -214,6 +246,74 @@ export function renderBusiness<T extends BusinessTemplate>(
       };
     }
 
+    case 'quotation-sent': {
+      const d = data as BusinessTemplateData['quotation-sent'];
+      return {
+        subject: `Quotation ${d.quotationNumber} from Hixaa Technologies`,
+        html: businessLayout(
+          `Quotation ${d.quotationNumber}`,
+          para(`Dear ${d.name},`) +
+            para('Please find our quotation attached as a PDF.') +
+            para(`Total: ${d.totalFormatted}`) +
+            para(`This quotation is valid until ${d.validUntil}.`),
+          'Prices are exclusive of GST unless stated otherwise on the attached document.',
+        ),
+        text:
+          `Dear ${d.name},\n\nPlease find quotation ${d.quotationNumber} attached.\n` +
+          `Total: ${d.totalFormatted}\nValid until: ${d.validUntil}\n\n` +
+          `Prices are exclusive of GST unless the attached document states otherwise.`,
+      };
+    }
+
+    case 'invoice-issued': {
+      const d = data as BusinessTemplateData['invoice-issued'];
+      return {
+        subject: `Tax invoice ${d.invoiceNumber} from Hixaa Technologies`,
+        html: businessLayout(
+          `Tax invoice ${d.invoiceNumber}`,
+          para(`Dear ${d.name},`) +
+            para(`Please find tax invoice ${d.invoiceNumber} attached, dated ${d.invoiceDate}.`) +
+            para(`Amount due: ${d.totalFormatted}`) +
+            para(`Payment is due by ${d.dueDate}.`),
+          'This is a computer-generated tax invoice; the attached PDF is the document of record.',
+        ),
+        text:
+          `Dear ${d.name},\n\nTax invoice ${d.invoiceNumber} dated ${d.invoiceDate} is attached.\n` +
+          `Amount due: ${d.totalFormatted}\nDue by: ${d.dueDate}`,
+      };
+    }
+
+    case 'distributor-approved': {
+      const d = data as BusinessTemplateData['distributor-approved'];
+      return {
+        subject: 'Your Hixaa distributor account has been approved',
+        html: businessLayout(
+          'Your distributor account is approved',
+          para(`Dear ${d.name},`) +
+            para(
+              `We are pleased to confirm your appointment as a Hixaa distributor. ` +
+                `Your distributor code is ${d.code}.`,
+            ) +
+            button('Sign in', d.loginUrl),
+        ),
+        text: `Dear ${d.name},\n\nYour Hixaa distributor account (${d.code}) has been approved.\nSign in: ${d.loginUrl}`,
+      };
+    }
+
+    case 'report-ready': {
+      const d = data as BusinessTemplateData['report-ready'];
+      return {
+        subject: `${d.reportName} — ${d.generatedAt}`,
+        html: businessLayout(
+          d.reportName,
+          para(`Dear ${d.name},`) +
+            para(`Your scheduled report is attached, covering ${d.rowCount} row(s).`) +
+            para(`Generated ${d.generatedAt}.`),
+        ),
+        text: `Dear ${d.name},\n\n${d.reportName} is attached (${d.rowCount} rows).\nGenerated ${d.generatedAt}.`,
+      };
+    }
+
     default: {
       // Exhaustiveness: adding a template without a case is a compile error.
       const exhaustive: never = template;
@@ -356,6 +456,26 @@ export function renderOps<T extends OpsTemplate>(
         subject: `[Hixaa DMS] Error spike: ${d.count} errors in ${d.windowMinutes}m`,
         html: opsLayout(title, rows, d.topError),
         text: asText(title, rows, d.topError),
+      };
+    }
+
+    case 'reconciliation-drift': {
+      const d = data as OpsTemplateData['reconciliation-drift'];
+      const title = `⚠️ Stock reconciliation drift — ${d.quantityDrifts} quantity, ${d.reservationDrifts} reservation`;
+      const rows: Array<[string, string]> = [
+        ['Quantity drifts', String(d.quantityDrifts)],
+        ['Reservation drifts', String(d.reservationDrifts)],
+        ['Balances checked', String(d.checked)],
+        ['First SKU', d.firstSku || '(none reported)'],
+      ];
+      const body =
+        'The ledger and the derived balances disagree. Balances are no longer trustworthy ' +
+        'until this is explained. The job reports and does NOT heal — correcting silently ' +
+        'would destroy the only evidence that a bug exists (ADR-0002).';
+      return {
+        subject: `[Hixaa DMS] Stock reconciliation drift: ${d.quantityDrifts + d.reservationDrifts} discrepancies`,
+        html: opsLayout(title, rows, body),
+        text: asText(title, rows, body),
       };
     }
 

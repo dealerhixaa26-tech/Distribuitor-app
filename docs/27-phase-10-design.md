@@ -55,6 +55,26 @@ Ten events in, one email and eight notifications out.
 whatsoever. The comment is false, and its falseness is precisely what let seven gaps accumulate
 across four phases without anyone noticing.
 
+### 2.1b A third copy, found while fixing the second
+
+Fixing `describe()` did **not** make low-stock notifications work. Re-running the injection showed
+`inventory.stock_low` still producing zero, and the reason was a *second, independent* copy of the
+same typo one function away: `EVENT_AUDIENCE` in `notifications.service.ts` — which maps an event to
+the permission that defines its recipients — was also keyed by literal, and also said `'stock.low'`.
+
+It carried a second one too: `'distributor.catalog.changed'`, dots where the constant has an
+underscore. That is why the two `distributor.catalog_changed` events in the outbox produced nothing.
+
+So an event had to clear **three** hand-keyed tables to reach a person, two of them keyed by
+literal, and nothing checked that they agreed. Fixing any one alone changed nothing observable,
+which is exactly why the bug survived: each fix would have looked like it had failed.
+
+This is recorded because it changes the conclusion. The rule is not "fix the `stock.low` typo" but
+**no string literal may key any table on the event path** — and the three tables must be made to
+prove they agree, in a test. `event-plumbing.spec.ts` does that, asserting for every
+notifications-routed event that a message exists and an audience is mapped. Reintroducing the
+original typo now fails to **compile**, so the test suite cannot even run.
+
 ### 2.2 Decisions
 
 **A consumer never matches an event by string literal.** Every `case` becomes

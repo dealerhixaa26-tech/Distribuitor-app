@@ -77,6 +77,12 @@ enum EmailStatus {
   SENT
   FAILED
   BOUNCED
+  /// The message was never attempted because the channel has no recipient
+  /// configured. Distinct from FAILED, which means delivery was tried and did
+  /// not succeed — this one means the operator has not finished setting up.
+  /// Deliberately NOT purged by the retention sweep: an unread alert is not
+  /// spent. See ADR-0022.
+  UNDELIVERABLE
 }
 
 enum StorageProvider {

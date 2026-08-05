@@ -9,6 +9,19 @@ import type { PinoLogger } from 'nestjs-pino';
  * changes, because a module only ever calls `sendBusiness('order-confirmed', …)`.
  * See docs/07-integrations.md §1.
  */
+/**
+ * A file travelling with a message.
+ *
+ * Buffer rather than a path or a stream: the PDF is rendered in memory by
+ * `QuotationPdfService` / `InvoicePdfService` and never written to disk, so a
+ * document a partner has not received yet leaves no artefact behind.
+ */
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
+
 export interface OutboundMail {
   to: string;
   cc?: string[];
@@ -16,6 +29,7 @@ export interface OutboundMail {
   html: string;
   text: string;
   replyTo?: string;
+  attachments?: MailAttachment[];
 }
 
 export interface MailTransport {
@@ -70,6 +84,11 @@ export class SmtpTransport implements MailTransport {
       html: message.html,
       text: message.text,
       replyTo: message.replyTo,
+      attachments: message.attachments?.map((a) => ({
+        filename: a.filename,
+        content: a.content,
+        contentType: a.contentType,
+      })),
     });
     return { messageId: info.messageId };
   }
@@ -103,9 +122,14 @@ export class LogTransport implements MailTransport {
 
   async send(message: OutboundMail): Promise<{ messageId: string }> {
     const messageId = `log-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    // Attachments are named and sized rather than dumped: a developer needs to
+    // see that the PDF was built and is not zero bytes, which is the failure
+    // that actually happens.
+    const attachments = message.attachments?.map((a) => `${a.filename} (${a.content.length}b)`);
     this.logger.info(
-      { transport: this.name, to: message.to, subject: message.subject, messageId },
-      `[mail:${this.name}] ${message.subject} → ${message.to}`,
+      { transport: this.name, to: message.to, subject: message.subject, messageId, attachments },
+      `[mail:${this.name}] ${message.subject} → ${message.to}` +
+        (attachments?.length ? ` [+${attachments.join(', ')}]` : ''),
     );
     return { messageId };
   }

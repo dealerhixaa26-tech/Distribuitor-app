@@ -1,5 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { QUEUE_NAMES } from '@hixaa/contracts';
+import { DOMAIN_EVENTS, QUEUE_NAMES } from '@hixaa/contracts';
 import type { Job } from 'bullmq';
 import { PinoLogger } from 'nestjs-pino';
 import { RequestContextStore } from '../common/context/request-context';
@@ -30,6 +30,9 @@ import type { OutboxJobData } from './email.processor';
  */
 @Processor(QUEUE_NAMES.NOTIFICATIONS)
 export class NotificationsProcessor extends WorkerHost {
+  /** Reported-once set, so a wiring bug is noticed rather than repeated. */
+  private readonly reportedUnhandled = new Set<string>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
@@ -48,7 +51,23 @@ export class NotificationsProcessor extends WorkerHost {
       async () => {
         const message = this.describe(eventType, payload, aggregateId);
         if (!message) {
-          this.logger.debug({ eventType }, 'No notification defined for this event');
+          /*
+           * Routed here and unrecognised. This was a debug line, and it is how
+           * `inventory.stock_low` was silently discarded: `describe()` matched
+           * the literal 'stock.low' while the constant is 'inventory.stock_low',
+           * so every low-stock alert fell through to `default` and vanished.
+           *
+           * Every case now matches on DOMAIN_EVENTS, and reaching this branch
+           * means the routing table sends an event here that nobody described —
+           * a wiring defect, reported once per process per type.
+           */
+          if (!this.reportedUnhandled.has(eventType)) {
+            this.reportedUnhandled.add(eventType);
+            this.logger.warn(
+              { eventType },
+              'Event routed to the notifications queue with NO HANDLER — it is being discarded',
+            );
+          }
           return;
         }
 
@@ -86,26 +105,26 @@ export class NotificationsProcessor extends WorkerHost {
     const text = (key: string): string => String(payload[key] ?? '');
 
     switch (eventType) {
-      case 'order.submitted':
+      case DOMAIN_EVENTS.ORDER_SUBMITTED:
         return {
           title: 'Order awaiting approval',
           body: `Order ${text('number')} has been submitted and needs a decision.`,
           actionUrl: `/orders/${aggregateId}`,
           priority: 'HIGH',
         };
-      case 'order.approved':
+      case DOMAIN_EVENTS.ORDER_APPROVED:
         return {
           title: 'Order approved',
           body: `Order ${text('number')} was approved.`,
           actionUrl: `/orders/${aggregateId}`,
         };
-      case 'order.rejected':
+      case DOMAIN_EVENTS.ORDER_REJECTED:
         return {
           title: 'Order rejected',
           body: `Order ${text('number')} was rejected.`,
           actionUrl: `/orders/${aggregateId}`,
         };
-      case 'shipment.dispatched':
+      case DOMAIN_EVENTS.SHIPMENT_DISPATCHED:
         return {
           title: 'Shipment dispatched',
           body:
@@ -113,7 +132,7 @@ export class NotificationsProcessor extends WorkerHost {
             (text('lrNumber') ? ` on LR ${text('lrNumber')}` : '') + '.',
           actionUrl: `/orders`,
         };
-      case 'payment.recorded':
+      case DOMAIN_EVENTS.PAYMENT_RECORDED:
         return {
           title: 'Receipt awaiting verification',
           body:
@@ -122,38 +141,102 @@ export class NotificationsProcessor extends WorkerHost {
           actionUrl: `/payments`,
           priority: 'HIGH',
         };
-      case 'payment.verified':
+      case DOMAIN_EVENTS.PAYMENT_VERIFIED:
         return {
           title: 'Receipt verified',
           body: `Receipt ${text('number')} was verified and the ledger credited.`,
           actionUrl: `/payments`,
         };
-      case 'invoice.issued':
+      /*
+       * Currently UNREACHABLE: `invoice.issued` routes to the EMAIL queue,
+       * because the counterparty needs the PDF. An event routes to exactly one
+       * queue, so this case never runs. Kept, and labelled, because deleting it
+       * would lose the decision — if fan-out to several queues is ever added,
+       * this is the intended message.
+       */
+      case DOMAIN_EVENTS.INVOICE_ISSUED:
         return {
           title: 'Tax invoice issued',
           body: `Invoice ${text('number')} was issued to ${text('counterparty')}.`,
           actionUrl: `/invoices/${aggregateId}`,
         };
-      case 'invoice.overdue':
+      case DOMAIN_EVENTS.INVOICE_OVERDUE:
         return {
           title: 'Invoice overdue',
           body: `Invoice ${text('number')} has passed its due date.`,
           actionUrl: `/invoices/${aggregateId}`,
           priority: 'HIGH',
         };
-      case 'stock.low':
+      case DOMAIN_EVENTS.STOCK_LOW:
         return {
           title: 'Stock below reorder level',
           body: `${text('sku')} has fallen to its reorder point at ${text('warehouseCode')}.`,
           actionUrl: `/inventory`,
           priority: 'HIGH',
         };
-      case 'pricelist.published':
+      case DOMAIN_EVENTS.PRICE_LIST_PUBLISHED:
         return {
           title: 'Price list published',
           body: `Price list ${text('code')} is now live and changes what partners pay.`,
           actionUrl: `/price-lists`,
         };
+
+      // ── Channel ──────────────────────────────────────────────────────────
+      case DOMAIN_EVENTS.DISTRIBUTOR_CATALOG_CHANGED:
+        return {
+          title: 'Distributor catalog changed',
+          body: `The assigned catalog for ${text('code') || 'a distributor'} was updated.`,
+          actionUrl: `/distributors/${aggregateId}`,
+        };
+      case DOMAIN_EVENTS.DISTRIBUTOR_SUSPENDED:
+        return {
+          title: 'Distributor suspended',
+          body: `${text('legalName') || text('code')} was suspended and can no longer transact.`,
+          actionUrl: `/distributors/${aggregateId}`,
+          priority: 'HIGH',
+        };
+      case DOMAIN_EVENTS.DISTRIBUTOR_DOCUMENT_EXPIRING:
+        return {
+          title: 'Distributor document expiring',
+          body: `A compliance document for ${text('code')} expires on ${text('expiresOn')}.`,
+          actionUrl: `/distributors/${aggregateId}`,
+          priority: 'HIGH',
+        };
+      case DOMAIN_EVENTS.DISTRIBUTOR_CREDIT_LIMIT_CHANGED:
+        return {
+          title: 'Credit limit changed',
+          body: `The credit limit for ${text('code')} was changed.`,
+          actionUrl: `/distributors/${aggregateId}`,
+        };
+
+      // ── Sales & finance ──────────────────────────────────────────────────
+      case DOMAIN_EVENTS.QUOTATION_ACCEPTED:
+        return {
+          title: 'Quotation accepted',
+          body: `Quotation ${text('number')} was accepted and can be converted to an order.`,
+          actionUrl: `/quotations/${aggregateId}`,
+          priority: 'HIGH',
+        };
+      case DOMAIN_EVENTS.ORDER_CANCELLED:
+        return {
+          title: 'Order cancelled',
+          body: `Order ${text('number')} was cancelled; any reserved stock has been released.`,
+          actionUrl: `/orders/${aggregateId}`,
+        };
+      case DOMAIN_EVENTS.SHIPMENT_DELIVERED:
+        return {
+          title: 'Shipment delivered',
+          body: `Shipment ${text('number')} was marked delivered.`,
+          actionUrl: `/orders`,
+        };
+      case DOMAIN_EVENTS.CREDIT_LIMIT_BREACHED:
+        return {
+          title: 'Credit limit breached',
+          body: `${text('counterparty') || 'A party'} is over its credit limit.`,
+          actionUrl: `/outstanding`,
+          priority: 'URGENT',
+        };
+
       default:
         return null;
     }
