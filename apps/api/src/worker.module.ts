@@ -14,11 +14,13 @@ import { InventoryProcessor } from './jobs/inventory.processor';
 import { EmailProcessor } from './jobs/email.processor';
 import { MaintenanceProcessor } from './jobs/maintenance.processor';
 import { NotificationsProcessor } from './jobs/notifications.processor';
+import { BackupProcessor } from './jobs/backup.processor';
 import { NotificationsService } from './modules/intelligence/notifications.service';
 import { DocumentRendererModule } from './modules/documents/document-renderer.module';
 import { InvoicePdfService } from './modules/finance/invoice-pdf.service';
 import { QuotationPdfService } from './modules/sales/quotation-pdf.service';
 import { SettingsModule } from './modules/settings/settings.module';
+import { BackupModule } from './modules/backup/backup.module';
 
 /**
  * Worker composition root.
@@ -79,6 +81,9 @@ import { SettingsModule } from './modules/settings/settings.module';
      */
     DocumentRendererModule,
     SettingsModule,
+    // Brings the Sheets backup and its adapter choice. The nightly @Cron lives
+    // in BackupProcessor below.
+    BackupModule,
     ScheduleModule.forRoot(),
   ],
   providers: [
@@ -86,6 +91,7 @@ import { SettingsModule } from './modules/settings/settings.module';
     MaintenanceProcessor,
     InventoryProcessor,
     NotificationsProcessor,
+    BackupProcessor,
     /*
      * Provided DIRECTLY rather than by importing `IntelligenceModule`, which
      * would pull Finance → Sales into a process that needs neither. The service

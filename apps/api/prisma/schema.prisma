@@ -177,6 +177,7 @@ model User {
   apiKeys                ApiKey[]
   uploadedDocuments      Document[]
   reportDefinitions      ReportDefinition[]
+  syncJobs               SyncJob[]               @relation("SyncJobTriggeredBy")
 
   @@index([status, deletedAt])
   @@index([createdAt(sort: Desc), id(sort: Desc)])
@@ -3321,4 +3322,85 @@ model SalesTarget {
   @@index([productId, periodStart])
   @@index([deletedAt])
   @@map("sales_target")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BACKUP & SYNC (Phase 10)
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum SyncTarget {
+  GOOGLE_SHEETS
+}
+
+enum SyncDirection {
+  /// Database → spreadsheet. The only direction that runs on a schedule.
+  EXPORT
+  /// Spreadsheet → database. Always dry-run unless explicitly confirmed.
+  RESTORE
+}
+
+enum SyncJobStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  /// Some entities exported and some did not. Distinct from FAILED because a
+  /// backup holding five of six entities is worth knowing about precisely, and
+  /// reporting it as success would be a lie.
+  PARTIAL
+  FAILED
+}
+
+/// One run of one entity's backup, or one restore.
+///
+/// Per ENTITY rather than per run, so a failure at row 400,000 of Orders
+/// resumes from its own checkpoint without re-exporting Products. See
+/// docs/07-integrations.md §2 and ADR-0023.
+model SyncJob {
+  id        String        @id @default(uuid(7)) @db.Uuid
+  target    SyncTarget    @default(GOOGLE_SHEETS)
+  direction SyncDirection @default(EXPORT)
+  /// The logical entity — 'Users', 'Products', 'Distributors', 'Orders',
+  /// 'Payments', 'Inventory'. A string rather than an enum because the set is
+  /// configuration, not a domain concept, and adding one must not need a
+  /// migration.
+  entity    String
+  status    SyncJobStatus @default(QUEUED)
+
+  /// The last id successfully written, for keyset resumption. Null before the
+  /// first batch lands.
+  checkpointCursor String? @map("checkpoint_cursor")
+  rowsProcessed    Int     @default(0) @map("rows_processed")
+  /// Counted before the run starts, so "exported 0 of 4,812" is detectable.
+  /// A run that exports zero rows for a non-empty table FAILS — that is the
+  /// silent-empty-backup failure this column exists to make impossible.
+  rowsExpected     Int?    @map("rows_expected")
+  batchesWritten   Int     @default(0) @map("batches_written")
+
+  spreadsheetId String? @map("spreadsheet_id")
+  sheetTitle    String? @map("sheet_title")
+
+  /// Restores are dry-run by default and must be explicitly confirmed.
+  isDryRun    Boolean @default(true) @map("is_dry_run")
+  /// Row-level diff produced by a dry run: counts and a bounded sample.
+  diffSummary Json?   @map("diff_summary")
+
+  startedAt   DateTime? @map("started_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  durationMs  Int?      @map("duration_ms")
+  error       String?
+  /// Requests to the Sheets API, so quota use is observable rather than guessed.
+  apiRequests Int       @default(0) @map("api_requests")
+
+  isScheduled   Boolean @default(false) @map("is_scheduled")
+  triggeredById String? @map("triggered_by_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  triggeredBy User? @relation("SyncJobTriggeredBy", fields: [triggeredById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([entity, createdAt(sort: Desc)])
+  @@index([direction, status])
+  @@map("sync_job")
 }

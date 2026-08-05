@@ -294,16 +294,23 @@ channel. Recipients are partners, so scheduled reports are BUSINESS, never OPS.
 
 ## 8. Sequencing
 
-10.2 before 10.1, for the reason in §3. Otherwise dependency order.
+10.2 came first, for the reason in §3: a backup that reports failures through a channel which
+discards them is not reporting. With that done, the **remaining modules run in roadmap order** at
+the owner's direction — 10.1, 10.3, 10.4 — which is now unblocked, because the only real dependency
+between them was 10.1 needing somewhere to send a failure.
 
-1. **§2 event plumbing** — the routing table and handlers, since everything downstream reports
+1. ✅ **§2 event plumbing** — the routing table and handlers, since everything downstream reports
    through it
-2. **10.2 ops channel** — ADR-0022, so failures have somewhere to go
-3. **10.4 monitoring** — worker heartbeat first; it is the control that would have caught the
-   original bug
+2. ✅ **10.2 ops channel** — ADR-0022, so failures have somewhere to go
+3. **10.1 Sheets backup** — against `LocalFileSheetsAdapter`, plus the GCP setup guide
 4. **10.3 database backups** — including the rehearsed restore
-5. **10.1 Sheets backup** — against `LocalFileSheetsAdapter`, plus the GCP setup guide
+5. **10.4 monitoring** — worker heartbeat, the control that would have caught the original bug
 6. **§7 scheduled report runner**
+
+One consequence worth stating: the worker heartbeat now lands *last* rather than first. Until it
+does, a dead worker is still detectable only by its silence — the condition that hid the original
+three-phase failure. Nothing in 10.1 or 10.3 depends on it, so this costs nothing but the order in
+which the safety net arrives.
 
 ## 9. Deferred, with reasons
 
