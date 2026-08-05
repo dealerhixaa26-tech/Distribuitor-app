@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   LEDGER_ENTRY_SIDES,
   Money,
+  PERMISSIONS,
   type LedgerEntryType,
   type LedgerPartyType,
   type ListPartyLedgerQuery,
@@ -9,10 +10,17 @@ import {
 import type { Prisma } from '@prisma/client';
 import { PinoLogger } from 'nestjs-pino';
 import { ClockService } from '../../common/utils/clock.service';
-import { InternalError, NotFoundError, ValidationError } from '../../common/errors/domain.error';
+import {
+  InternalError,
+  NotFoundError,
+  PermissionDeniedError,
+  SelfApprovalError,
+  ValidationError,
+} from '../../common/errors/domain.error';
 import { AuditService } from '../../infrastructure/database/audit.service';
 import type { PrismaTransaction } from '../../infrastructure/database/prisma.service';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 
 /**
  * The party ledger — the source of truth for what is owed. See ADR-0015.
@@ -38,6 +46,7 @@ export class LedgerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly settings: SettingsService,
     private readonly clock: ClockService,
     private readonly logger: PinoLogger,
   ) {
@@ -308,6 +317,15 @@ export class LedgerService {
     reason: string;
     entryDate?: string;
     actorId: string;
+    /**
+     * A second person's id, required above the approval threshold.
+     *
+     * Phase 8 left this control undone and named it as an obligation on
+     * Phase 9 (docs/24 §8). It is the same shape as order approval and payment
+     * verification: writing off money the company will not collect is exactly
+     * the act that should not be one person's decision.
+     */
+    approvedById?: string;
   }) {
     const amount = Money.of(input.amount);
     const balance = await this.balanceFor(input.partyType, input.partyId);
@@ -318,6 +336,8 @@ export class LedgerService {
           'Writing off more than is owed would create a credit balance from nothing.',
       );
     }
+
+    await this.assertWriteOffApproved(amount, input.actorId, input.approvedById);
 
     const entryDate = input.entryDate
       ? new Date(`${input.entryDate}T00:00:00.000Z`)
@@ -330,7 +350,9 @@ export class LedgerService {
         entryType: 'WRITE_OFF',
         credit: amount.toString(),
         entryDate,
-        narration: `Write-off — ${input.reason}`,
+        narration:
+          `Write-off — ${input.reason}` +
+          (input.approvedById ? ' (approved by a second authoriser)' : ''),
         actorId: input.actorId,
       });
 
@@ -343,8 +365,9 @@ export class LedgerService {
           partyId: input.partyId,
           amount: amount.toString(),
           reason: input.reason,
+          approvedById: input.approvedById ?? null,
         },
-        metadata: { actorId: input.actorId },
+        metadata: { actorId: input.actorId, approvedById: input.approvedById ?? null },
       });
 
       return entry;
@@ -365,6 +388,64 @@ export class LedgerService {
       entryId: posted.id,
       newBalance: b.toString(),
     }));
+  }
+
+  /**
+   * The write-off approval gate — the second obligation Phase 8 left to Phase 9.
+   *
+   * Below the threshold a write-off is routine housekeeping (a few rupees of
+   * rounding on a settled account) and requiring two people would only teach
+   * everyone to share a login. Above it, the act needs a second authoriser who
+   * is NOT the requester — the same separation as order approval and payment
+   * verification, and refused with the same error class so the three read
+   * identically in a log.
+   *
+   * The threshold is a SETTING, because "how much may one person forgive" is a
+   * commercial policy that will change, and a constant would make changing it a
+   * deploy.
+   */
+  private async assertWriteOffApproved(
+    amount: Money,
+    actorId: string,
+    approvedById?: string,
+  ): Promise<void> {
+    const threshold = await this.writeOffThreshold();
+    if (amount.lte(threshold)) return;
+
+    if (!approvedById) {
+      throw new ValidationError(
+        `A write-off of ${amount.format()} exceeds the ${threshold.format()} threshold and ` +
+          'requires a second authoriser. Money the company will not collect should not be one ' +
+          'person’s decision.',
+      );
+    }
+
+    if (approvedById === actorId) {
+      throw new SelfApprovalError('write-off', 'authorise', 'requested');
+    }
+
+    // The approver must actually hold the authority, or "approved by" is a name
+    // in a field rather than a control.
+    const approver = await this.prisma.db.userRole.findFirst({
+      where: {
+        userId: approvedById,
+        role: { permissions: { some: { permission: { key: PERMISSIONS.PAYMENT_DELETE } } } },
+      },
+      select: { userId: true },
+    });
+    if (!approver) {
+      throw new PermissionDeniedError(PERMISSIONS.PAYMENT_DELETE);
+    }
+  }
+
+  /** `finance.writeOffApprovalThreshold`, defaulting to ₹10,000. */
+  private async writeOffThreshold(): Promise<Money> {
+    const finance = await this.settings.get<{ writeOffApprovalThreshold?: string | number }>(
+      'finance',
+      'defaults',
+    );
+    const configured = finance?.writeOffApprovalThreshold;
+    return Money.of(configured === undefined || configured === null ? '10000' : String(configured));
   }
 
   /**

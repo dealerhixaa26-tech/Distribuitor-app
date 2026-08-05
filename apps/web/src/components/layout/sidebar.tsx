@@ -142,7 +142,6 @@ const NAV_SECTIONS: Array<{ heading: string; items: NavItem[] }> = [
         href: '/reports',
         icon: BarChart3,
         permission: PERMISSIONS.REPORT_READ,
-        phase: 9,
       },
     ],
   },

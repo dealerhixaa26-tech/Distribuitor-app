@@ -1,0 +1,33 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 0014 — remove two indexes that did not earn their place.
+--
+-- Migration 0013 added covering indexes on `order_line` and `invoice_line`
+-- alongside the partial `order_analytics_idx`. The partial one is measurably
+-- worth having: it took the receivables panel from 19.9 ms to 9.9 ms at 10×
+-- projected volume. The covering ones were added on the reasoning that they
+-- "help somewhat and cost one index" — which was not a measurement.
+--
+-- Measured properly, with ONLY the partial index in place:
+--
+--   panel                     with covering   without
+--   sales trend, 12 months        39.6 ms      37.3 ms
+--   top 10 products               39.1 ms      40.9 ms
+--
+-- Identical within noise, and top-products was actually SLOWER with them. Those
+-- two panels aggregate 120,000 line rows and no index removes that work — as
+-- ADR-0019 already says.
+--
+-- They also caused permanent drift: Prisma cannot model `INCLUDE (...)`, so
+-- `migrate diff` proposed DROPPING them on every future run (HANDOFF §4.13).
+-- Keeping them would mean fighting that forever for an index that pays nothing.
+--
+-- Dropped rather than amended into 0013 because 0013 is already applied, and
+-- rewriting an applied migration means a database reset. A separate migration
+-- also records honestly that the first attempt was not measured.
+--
+-- ADR-0019's own rule, applied to itself: an index nobody measured is a write
+-- cost nobody accounted for.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+DROP INDEX IF EXISTS "order_line_rollup_idx";
+DROP INDEX IF EXISTS "invoice_line_rollup_idx";

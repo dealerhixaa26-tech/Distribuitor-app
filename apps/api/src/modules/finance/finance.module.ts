@@ -63,6 +63,10 @@ import { TaxNotesService } from './tax-notes.service';
     OutstandingService,
     GstReturnsService,
   ],
-  exports: [OutstandingService, LedgerService, InvoicesService],
+  // Exported for Phase 9. `GstReturnsService` in particular: the GST_SUMMARY
+  // report PRESENTS the return's figures rather than recomputing them, because
+  // a report and a filing that disagree is worse than either alone — and the
+  // report is the one that gets believed in the room.
+  exports: [OutstandingService, LedgerService, InvoicesService, GstReturnsService],
 })
 export class FinanceModule {}

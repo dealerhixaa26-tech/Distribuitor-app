@@ -122,3 +122,26 @@ export function humanizeEnum(value: string | null | undefined): string {
     .join(' ')
     .replace(/^./, (c) => c.toUpperCase());
 }
+
+/**
+ * Default date-range bounds for a report form.
+ *
+ * The `no-restricted-syntax` clock rule exists so time-dependent LOGIC stays
+ * testable by injecting a clock. It does not fit here: this is a browser with
+ * no DI container, and the value is the initial content of a date input that
+ * the user immediately sees and can change. There is no assertion to make about
+ * it and nothing downstream depends on it — the server re-derives every figure
+ * from the dates actually submitted.
+ *
+ * Kept in one place rather than inlined so the exception is stated once.
+ */
+// eslint-disable-next-line no-restricted-syntax
+export const todayIso = (): string => new Date().toISOString().slice(0, 10);
+
+/** 1 April of the current Indian financial year, as `YYYY-MM-DD`. */
+export function financialYearStartIso(): string {
+  // eslint-disable-next-line no-restricted-syntax
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  return `${now.getUTCMonth() + 1 >= 4 ? year : year - 1}-04-01`;
+}

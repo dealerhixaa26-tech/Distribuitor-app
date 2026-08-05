@@ -466,7 +466,9 @@ export class LedgerController {
     summary: 'Write off a balance that will not be collected',
     description:
       'A ledger act, not a payment — no money arrived, and recording it as a receipt would ' +
-      'overstate cash. The reason is mandatory and audited.',
+      'overstate cash. The reason is mandatory and audited. Above ' +
+      'finance.writeOffApprovalThreshold a second authoriser is required, who may not be the ' +
+      'requester and must actually hold the authority.',
   })
   async writeOff(
     @Body(zodBody(writeOffSchema)) dto: WriteOffDto,

@@ -170,6 +170,7 @@ model User {
   notificationPrefs      NotificationPreference[]
   apiKeys                ApiKey[]
   uploadedDocuments      Document[]
+  reportDefinitions      ReportDefinition[]
 
   @@index([status, deletedAt])
   @@index([createdAt(sort: Desc), id(sort: Desc)])
@@ -574,6 +575,7 @@ model Document {
   kycRecords   DistributorDocument[]
   agreements   Agreement[]
   productMedia ProductMedia[]
+  reportRuns   ReportRun[]
 
   @@index([checksumSha256])
   @@index([scanStatus])
@@ -849,6 +851,7 @@ model Territory {
   warehouses   Warehouse[]
   distributors Distributor[]
   customers    Customer[]
+  salesTargets SalesTarget[]
 
   @@index([parentId])
   @@index([path])
@@ -1050,6 +1053,8 @@ model Distributor {
   invoices           Invoice[]
   payments           Payment[]
   ledgerEntries      LedgerEntry[]
+  // ── Intelligence (Phase 9) ──────────────────────────────────────────────
+  salesTargets       SalesTarget[]
 
   @@index([status, territoryId])
   @@index([priceListId])
@@ -1389,6 +1394,8 @@ model Product {
   // ── Finance (Phase 8) ───────────────────────────────────────────────────
   invoiceLines      InvoiceLine[]
   taxNoteLines      TaxNoteLine[]
+  // ── Intelligence (Phase 9) ──────────────────────────────────────────────
+  salesTargets      SalesTarget[]
 
   @@index([categoryId, status])
   @@index([brandId])
@@ -3128,4 +3135,184 @@ model OrderTimeline {
 
   @@index([orderId, createdAt(sort: Desc)])
   @@map("order_timeline")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// INTELLIGENCE (Phase 9) — see docs/25-phase-9-design.md
+//
+// This phase mostly READS, which is why so little is added here. The one rule:
+// nothing in Phase 9 may change a business fact. `Notification` records
+// something the system said; `ReportDefinition` and `ReportRun` record what
+// someone asked for. Neither is a business fact — a reporting layer that can
+// write is how "fix the number in the report" eventually becomes an UPDATE
+// against a ledger.
+//
+// There are deliberately NO materialised views. They were specified in Phase 0,
+// measured in Phase 9, and dropped — ADR-0019 carries the numbers.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// The report CATALOGUE, as an enum rather than a query builder (ADR-0020).
+///
+/// A user saves a configured instance of one of these; they never supply a
+/// query shape. Adding a report is a catalogue entry and a function, which is
+/// a deploy — and for a six-report domain that is a better trade than owning a
+/// DSL that has to inject scope predicates correctly into queries nobody
+/// anticipated.
+enum ReportType {
+  SALES_SUMMARY
+  DISTRIBUTOR_PERFORMANCE
+  PRODUCT_PERFORMANCE
+  /// EXCLUDES `DISTRIBUTOR` warehouses — those goods are sold (ADR-0014 §4).
+  STOCK_VALUATION
+  RECEIVABLES_AGING
+  /// Delegates to GstReturnsService rather than recomputing: a report and a
+  /// filing that disagree is worse than either alone.
+  GST_SUMMARY
+}
+
+enum ReportFormat {
+  CSV
+  XLSX
+  PDF
+}
+
+enum ReportRunStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+enum TargetPeriodType {
+  MONTH
+  QUARTER
+  YEAR
+}
+
+/// A saved, named instance of a catalogue report plus its validated parameters.
+model ReportDefinition {
+  id   String     @id @default(uuid(7)) @db.Uuid
+  type ReportType
+  name String
+
+  description String?
+
+  /// Validated against the catalogue entry's Zod schema at SAVE time and again
+  /// at RUN time. A definition saved against a parameter that has since changed
+  /// shape fails loudly on the next run rather than producing a quietly wrong
+  /// report.
+  parameters Json @default("{}")
+
+  format ReportFormat @default(CSV)
+
+  /// Visible to everyone who may read reports, rather than only its author.
+  isShared Boolean @default(false) @map("is_shared")
+
+  // ── Scheduling (module 9.5) ─────────────────────────────────────────────
+  /// Null when the report is run on demand only.
+  cronExpression   String?   @map("cron_expression")
+  /// Where a scheduled run is emailed. Business channel — these reach partners.
+  recipients       String[]
+  isScheduleActive Boolean   @default(false) @map("is_schedule_active")
+  lastRunAt        DateTime? @map("last_run_at") @db.Timestamptz(3)
+  nextRunAt        DateTime? @map("next_run_at") @db.Timestamptz(3)
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+
+  createdBy User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  runs      ReportRun[]
+
+  @@index([type])
+  @@index([createdById])
+  @@index([isScheduleActive, nextRunAt])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([deletedAt])
+  @@map("report_definition")
+}
+
+/// One execution of a report. Append-only in practice: a run says what was
+/// produced at a moment, and editing it would destroy the record of what a
+/// recipient actually received.
+model ReportRun {
+  id           String          @id @default(uuid(7)) @db.Uuid
+  definitionId String?         @map("definition_id") @db.Uuid
+  /// Denormalised so an ad-hoc run (no saved definition) still says what it was.
+  type         ReportType
+  status       ReportRunStatus @default(QUEUED)
+  format       ReportFormat
+
+  /// The parameters ACTUALLY used, snapshotted — a saved definition can be
+  /// edited afterwards, and a run must still explain its own numbers.
+  parameters Json @default("{}")
+
+  rowCount   Int?    @map("row_count")
+  /// Null for a synchronous run under the row cap, which streams straight back
+  /// rather than producing a stored file.
+  documentId String? @map("document_id") @db.Uuid
+
+  startedAt   DateTime? @map("started_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  durationMs  Int?      @map("duration_ms")
+  error       String?
+
+  /// True when a scheduler produced this rather than a person.
+  isScheduled Boolean @default(false) @map("is_scheduled")
+
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdById String?  @map("created_by_id") @db.Uuid
+
+  definition ReportDefinition? @relation(fields: [definitionId], references: [id], onDelete: SetNull)
+  document   Document?         @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([definitionId, createdAt(sort: Desc)])
+  @@index([status])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@map("report_run")
+}
+
+/// A sales target, so "target vs achievement" has something to compare against.
+///
+/// Exactly ONE dimension is set — territory, distributor, or product — enforced
+/// by a CHECK. A target against two dimensions at once is ambiguous about what
+/// it measures, and the ambiguity only surfaces when the achievement figure
+/// looks wrong.
+model SalesTarget {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  periodType  TargetPeriodType @map("period_type")
+  /// First day of the period. Stored as a date so a target is unambiguous about
+  /// which month it belongs to regardless of the reader's timezone.
+  periodStart DateTime         @map("period_start") @db.Date
+  periodEnd   DateTime         @map("period_end") @db.Date
+
+  territoryId   String? @map("territory_id") @db.Uuid
+  distributorId String? @map("distributor_id") @db.Uuid
+  productId     String? @map("product_id") @db.Uuid
+
+  /// Revenue target, GST-exclusive so it compares against taxable value rather
+  /// than against a figure that moves when a rate changes.
+  targetAmount   Decimal  @map("target_amount") @db.Decimal(18, 4)
+  /// Optional unit target, for product lines measured in volume.
+  targetQuantity Decimal? @map("target_quantity") @db.Decimal(18, 4)
+
+  notes String?
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdById String?   @map("created_by_id") @db.Uuid
+
+  territory   Territory?   @relation(fields: [territoryId], references: [id], onDelete: Cascade)
+  distributor Distributor? @relation(fields: [distributorId], references: [id], onDelete: Cascade)
+  product     Product?     @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([periodStart, periodEnd])
+  @@index([territoryId, periodStart])
+  @@index([distributorId, periodStart])
+  @@index([productId, periodStart])
+  @@index([deletedAt])
+  @@map("sales_target")
 }
