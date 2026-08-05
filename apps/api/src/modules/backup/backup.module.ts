@@ -9,6 +9,7 @@ import { LocalFileSheetsAdapter } from '../../infrastructure/sheets/local-file-s
 import { SheetsPort } from '../../infrastructure/sheets/sheets.port';
 import { BackupController } from './backup.controller';
 import { BackupService } from './backup.service';
+import { DatabaseBackupService } from './database-backup.service';
 import { RestoreService } from './restore.service';
 
 /**
@@ -42,7 +43,8 @@ import { RestoreService } from './restore.service';
     },
     BackupService,
     RestoreService,
+    DatabaseBackupService,
   ],
-  exports: [BackupService, RestoreService, SheetsPort],
+  exports: [BackupService, RestoreService, DatabaseBackupService, SheetsPort],
 })
 export class BackupModule {}

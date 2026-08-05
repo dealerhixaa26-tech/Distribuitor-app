@@ -7,6 +7,7 @@ import { AppConfigService } from '../config/app-config.service';
 import { MailService } from '../infrastructure/mail/mail.service';
 import { OutboxDispatcherService } from '../infrastructure/outbox/outbox-dispatcher.service';
 import { BackupService } from '../modules/backup/backup.service';
+import { DatabaseBackupService } from '../modules/backup/database-backup.service';
 
 /**
  * The Sheets backup, scheduled and on demand.
@@ -18,12 +19,77 @@ import { BackupService } from '../modules/backup/backup.service';
 export class BackupProcessor extends WorkerHost {
   constructor(
     private readonly backup: BackupService,
+    private readonly database: DatabaseBackupService,
     private readonly mail: MailService,
     private readonly config: AppConfigService,
     private readonly logger: PinoLogger,
   ) {
     super();
     this.logger.setContext(BackupProcessor.name);
+  }
+
+  /**
+   * The nightly `pg_dump` — the REAL disaster-recovery mechanism (ADR-0024).
+   *
+   * 01:30 IST: before the 02:00 Sheets sync so the two do not contend, and
+   * before the 03:00 retention purge so the backup captures the rows that purge
+   * is about to delete.
+   */
+  @Cron(process.env.BACKUP_CRON || '30 1 * * *', { timeZone: 'Asia/Kolkata' })
+  async databaseBackup(): Promise<void> {
+    if (!this.config.queue.workerEnabled || !this.config.backup.enabled) return;
+
+    await OutboxDispatcherService.asSystem('database-backup', async () => {
+      const result = await this.database.run();
+
+      // Reported on success too. A nightly green line is what makes its absence
+      // noticeable; a report only on failure is indistinguishable from silence.
+      await this.mail.sendOps('backup-report', {
+        status: result.status,
+        target: result.file
+          ? `pg_dump → ${result.file} (${result.encryptedBytes ?? 0} bytes encrypted, ` +
+            `${result.retainedFiles ?? 0} retained)`
+          : 'pg_dump',
+        sizeBytes: result.encryptedBytes,
+        durationSeconds: result.durationSeconds,
+        error: result.error,
+      });
+    });
+  }
+
+  /**
+   * The monthly restore rehearsal.
+   *
+   * ADR-0024: a backup is proven by restoring it, not by an exit code. This
+   * restores the newest encrypted dump into a scratch database and compares row
+   * counts table by table — so a backup chain that quietly stops being
+   * restorable fails loudly, instead of staying green until someone needs it.
+   */
+  @Cron(process.env.BACKUP_REHEARSAL_CRON || '0 4 1 * *', { timeZone: 'Asia/Kolkata' })
+  async rehearseRestore(): Promise<void> {
+    if (!this.config.queue.workerEnabled || !this.config.backup.enabled) return;
+
+    await OutboxDispatcherService.asSystem('backup-rehearsal', async () => {
+      const result = await this.database.rehearse();
+
+      await this.mail.sendOps('backup-report', {
+        status: result.status,
+        target:
+          `RESTORE REHEARSAL — ${result.restoredTables}/${result.sourceTables} tables, ` +
+          `${result.restoredRows}/${result.sourceRows} rows`,
+        durationSeconds: result.durationSeconds,
+        error:
+          result.error ??
+          (result.mismatches.length ? `Mismatches: ${result.mismatches.join(' · ')}` : undefined),
+      });
+
+      if (result.status === 'success') {
+        this.logger.info(
+          { tables: result.restoredTables, rows: result.restoredRows },
+          'Restore rehearsal passed — the backup is provably restorable',
+        );
+      }
+    });
   }
 
   /** Manual runs, enqueued by `POST /backup/sheets/sync`. */

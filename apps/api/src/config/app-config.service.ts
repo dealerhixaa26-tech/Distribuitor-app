@@ -154,6 +154,20 @@ export class AppConfigService {
     };
   }
 
+  get backup() {
+    return {
+      enabled: this.get('BACKUP_ENABLED'),
+      dir: this.get('BACKUP_DIR'),
+      gpgRecipient: this.get('BACKUP_GPG_RECIPIENT'),
+      cron: this.get('BACKUP_CRON'),
+      keepDaily: this.get('BACKUP_KEEP_DAILY'),
+      keepWeekly: this.get('BACKUP_KEEP_WEEKLY'),
+      keepMonthly: this.get('BACKUP_KEEP_MONTHLY'),
+      rehearsalDb: this.get('BACKUP_REHEARSAL_DB'),
+      rehearsalCron: this.get('BACKUP_REHEARSAL_CRON'),
+    };
+  }
+
   get sheets() {
     return {
       enabled: this.get('SHEETS_ENABLED'),

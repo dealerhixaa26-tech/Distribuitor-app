@@ -34,6 +34,40 @@ read_env() {
 }
 
 DATABASE_URL="${DATABASE_URL:-$(read_env DATABASE_URL)}"
+
+# ── Prisma's URL is not libpq's URL ────────────────────────────────────────
+#
+# DATABASE_URL carries `?schema=public`, which Prisma requires and pg_dump
+# rejects outright:
+#
+#   pg_dump: error: invalid URI query parameter: "schema"
+#
+# Found by running this, not by reading it. Left unhandled, the nightly backup
+# would have failed every night while the script looked perfectly correct — and
+# a backup that never runs is the exact failure this module exists to prevent.
+#
+# Only Prisma-specific parameters are stripped. `sslmode` and friends are real
+# libpq parameters and a production URL will need them.
+strip_prisma_params() {
+  local url="$1" query base
+  case "$url" in
+    *\?*) base="${url%%\?*}"; query="${url#*\?}" ;;
+    *) printf '%s' "$url"; return ;;
+  esac
+
+  local kept=""
+  local IFS='&'
+  for param in $query; do
+    case "$param" in
+      schema=*|connection_limit=*|pool_timeout=*|pgbouncer=*|connect_timeout=*) continue ;;
+      '') continue ;;
+      *) kept="${kept:+$kept&}$param" ;;
+    esac
+  done
+
+  printf '%s%s' "$base" "${kept:+?$kept}"
+}
+PG_URL="$(strip_prisma_params "$DATABASE_URL")"
 BACKUP_DIR="${BACKUP_DIR:-$(read_env BACKUP_DIR)}"
 BACKUP_DIR="${BACKUP_DIR:-$REPO_ROOT/storage/backups}"
 GPG_RECIPIENT="${BACKUP_GPG_RECIPIENT:-$(read_env BACKUP_GPG_RECIPIENT)}"
@@ -42,7 +76,10 @@ KEEP_DAILY="${BACKUP_KEEP_DAILY:-14}"
 KEEP_WEEKLY="${BACKUP_KEEP_WEEKLY:-8}"
 KEEP_MONTHLY="${BACKUP_KEEP_MONTHLY:-12}"
 
-fail() { echo "backup.sh: $*" >&2; exit "${2:-1}"; }
+# $1 is the message, $2 the exit code. Using "$*" here printed the exit code
+# as part of the error text — a small thing, but an error message that ends in
+# a stray "2" makes a reader doubt the rest of it.
+fail() { echo "backup.sh: $1" >&2; exit "${2:-1}"; }
 
 [ -n "$DATABASE_URL" ] || fail "DATABASE_URL is not set and not in $ENV_FILE"
 command -v pg_dump >/dev/null || fail "pg_dump is not installed"
@@ -71,7 +108,7 @@ gpg --list-keys "$GPG_RECIPIENT" >/dev/null 2>&1 \
 # ── Dump ───────────────────────────────────────────────────────────────────
 mkdir -p "$BACKUP_DIR"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-DB_NAME="$(printf '%s' "$DATABASE_URL" | sed -e 's|.*/||' -e 's|?.*||')"
+DB_NAME="$(printf '%s' "$PG_URL" | sed -e 's|.*/||' -e 's|?.*||')"
 BASENAME="hixaa-${DB_NAME}-${STAMP}"
 TARGET="$BACKUP_DIR/${BASENAME}.dump.gpg"
 TMP="$(mktemp -t hixaa-backup)"
@@ -82,7 +119,7 @@ START_MS=$(($(date +%s) * 1000))
 
 # -Fc: custom format. Compressed, and pg_restore can be selective over it —
 # a plain SQL file cannot restore one table without hand-editing.
-if ! pg_dump --format=custom --no-owner --no-privileges --file="$TMP" "$DATABASE_URL" 2>/tmp/hixaa-pgdump.err; then
+if ! pg_dump --format=custom --no-owner --no-privileges --file="$TMP" "$PG_URL" 2>/tmp/hixaa-pgdump.err; then
   fail "pg_dump failed: $(head -3 /tmp/hixaa-pgdump.err)" 2
 fi
 

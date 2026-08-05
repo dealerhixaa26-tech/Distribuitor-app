@@ -119,6 +119,28 @@ export const envSchema = z
     S3_SECRET_ACCESS_KEY: z.string().optional(),
 
     // ── Google Sheets backup ────────────────────────────────────────────────
+    // ── Database backups (10.3, ADR-0024) ──────────────────────────────────
+    BACKUP_ENABLED: bool.default('false'),
+    /// Where encrypted dumps land. Should be a MOUNTED path, not local disk —
+    /// a backup on the same disk as the database protects against neither
+    /// disk failure nor the machine going away.
+    BACKUP_DIR: z.string().default('./storage/backups'),
+    /// GPG public key id or email. The PRIVATE key must not live on this host
+    /// (ADR-0024) — the server can create backups and cannot read them.
+    BACKUP_GPG_RECIPIENT: z.string().default(''),
+    /// Nightly, 01:30 IST — before the 02:00 Sheets sync so the two do not
+    /// contend, and before the 03:00 retention purge so a backup captures the
+    /// rows that purge is about to delete.
+    BACKUP_CRON: z.string().default('30 1 * * *'),
+    BACKUP_KEEP_DAILY: positiveInt.default(14),
+    BACKUP_KEEP_WEEKLY: positiveInt.default(8),
+    BACKUP_KEEP_MONTHLY: positiveInt.default(12),
+    /// Scratch database the monthly rehearsal restores into. It is DROPPED and
+    /// recreated on every rehearsal, so it must never name a real database.
+    BACKUP_REHEARSAL_DB: z.string().default('hixaa_dms_rehearsal'),
+    /// Monthly, 04:00 on the 1st. A backup nobody has restored is not a backup.
+    BACKUP_REHEARSAL_CRON: z.string().default('0 4 1 * *'),
+
     SHEETS_ENABLED: bool.default('false'),
     SHEETS_SERVICE_ACCOUNT_EMAIL: z.string().default(''),
     SHEETS_PRIVATE_KEY: z.string().default(''),
@@ -206,6 +228,22 @@ export const envSchema = z
        */
       if (!env.MAIL_OPS_TO) {
         fail('MAIL_OPS_TO', 'An ops alert recipient is required in production (ADR-0022)');
+      }
+      /*
+       * ADR-0024. Backups are not optional in production, and an UNENCRYPTED
+       * one is a copy of every customer, price and bank detail in a file with
+       * no lock on it. Both conditions refuse at boot rather than being
+       * discovered on the day a restore is needed.
+       */
+      if (!env.BACKUP_ENABLED) {
+        fail('BACKUP_ENABLED', 'Database backups cannot be disabled in production (ADR-0024)');
+      }
+      if (!env.BACKUP_GPG_RECIPIENT) {
+        fail(
+          'BACKUP_GPG_RECIPIENT',
+          'A GPG recipient is required in production — an unencrypted backup is not acceptable ' +
+            '(ADR-0024). Keep the PRIVATE key off this host.',
+        );
       }
       if (env.MAIL_OPS_DRIVER === 'smtp' && !env.MAIL_OPS_PASSWORD) {
         fail('MAIL_OPS_PASSWORD', 'Ops SMTP credentials are required in production');

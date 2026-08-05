@@ -70,6 +70,9 @@ describe('environment validation', () => {
       // ADR-0022: production must have somewhere to send an ops alert.
       MAIL_OPS_DRIVER: 'log',
       MAIL_OPS_TO: 'hixaa.ops@gmail.com',
+      // ADR-0024: production must take encrypted backups.
+      BACKUP_ENABLED: 'true',
+      BACKUP_GPG_RECIPIENT: 'ops@hixaa.com',
     };
 
     it('accepts a well-formed production configuration', () => {
@@ -123,6 +126,32 @@ describe('environment validation', () => {
       expect(() =>
         validateEnv({ ...productionEnv, MAIL_OPS_DRIVER: 'smtp', MAIL_OPS_PASSWORD: '' }),
       ).toThrow(/MAIL_OPS_PASSWORD/);
+    });
+
+    /*
+     * ADR-0024. A production deployment with backups off, or with backups
+     * written in plaintext, is not a deployment anyone should be able to make
+     * by forgetting a variable. Both refuse at boot rather than being
+     * discovered on the day a restore is needed.
+     */
+    it('refuses to boot in production with backups disabled', () => {
+      expect(() => validateEnv({ ...productionEnv, BACKUP_ENABLED: 'false' })).toThrow(
+        /BACKUP_ENABLED/,
+      );
+    });
+
+    it('refuses to boot in production with an UNENCRYPTED backup', () => {
+      expect(() => validateEnv({ ...productionEnv, BACKUP_GPG_RECIPIENT: '' })).toThrow(
+        /BACKUP_GPG_RECIPIENT/,
+      );
+    });
+
+    it('still allows development to run with backups off', () => {
+      // A developer must be able to run the system without generating a GPG
+      // keypair first.
+      expect(() =>
+        validateEnv({ ...baseEnv, BACKUP_ENABLED: 'false', BACKUP_GPG_RECIPIENT: '' }),
+      ).not.toThrow();
     });
 
     it('still allows development to run with no ops recipient', () => {
