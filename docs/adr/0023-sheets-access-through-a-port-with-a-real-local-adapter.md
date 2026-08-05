@@ -35,8 +35,8 @@ export interface SheetsPort {
 
 with two implementations, selected by `SHEETS_ENABLED`:
 
-- **`GoogleSheetsAdapter`** — written against the Sheets v4 API. Shipped but **unexecuted** until
-  credentials exist, and labelled as such in the completion record rather than implied to be working.
+- **`GoogleSheetsAdapter`** — written against the Sheets v4 API. **Now executed and verified**; see
+  the update below.
 - **`LocalFileSheetsAdapter`** — writes the same tabular payloads through the existing
   `StorageService` to `storage/sheets-backup/<spreadsheet>/<sheet>.csv`.
 
@@ -84,3 +84,44 @@ permissions, restore dry-run and diff, ops alerting, cron wiring — ships verif
   bitten by (`docs/HANDOFF.md` §4.17 — a library's README can be wrong; probe the package).
 - `docs/07` §2's `SyncJob.checkpointCursor` refers to a model that **does not exist** among the 79 in
   `schema.prisma`. It is new work in this phase, not reuse, despite HANDOFF listing it otherwise.
+
+---
+
+## Update — 2026-08-05: E7 answered, and the adapter has now run
+
+The owner created the service account and both spreadsheets per `docs/28`. The Google adapter was
+executed for the first time the same day.
+
+**It worked on first contact.** Authentication, sheet creation, chunked append, staging swap,
+read-back and the restore diff all succeeded against the live API with no code change. Every check
+in `verify-backup.ts` passes against `provider: GOOGLE` exactly as it did against `LOCAL_FILE`:
+
+```
+Users 7/7 · Products 14/14 · Distributors 2/2 · Orders 5/5 · Payments 10/10 · Inventory 2/2
+```
+
+That is a stronger result than this ADR predicted, and the prediction should be recorded as having
+been pessimistic rather than quietly dropped. The deferred list said the JWT assertion, the
+`values:append` semantics and the delete-then-rename swap could not be trusted until they had run.
+They have now run, and they were right.
+
+**What was actually wrong was configuration, not code**, and both failures were the ones `docs/28`
+was written to catch:
+
+- `SHEETS_ENABLED=True` — the boolean parser accepts `'true' | 'false' | '1' | '0'`, so the API
+  refused to boot. It failed closed and named the variable, which is the behaviour wanted.
+- `SHEETS_PRIVATE_KEY` was stored unquoted. It survived, because a PEM body is base64 and contains
+  no `#`, but it was one character away from silent truncation.
+
+**One real bug surfaced, and only because it ran**: `SyncJob.apiRequests` recorded
+`SheetsPort.requestCount()` raw, which is the adapter's running total for the process. The first
+Google run wrote 112, 120, 128, 136, 144, 152, 160 across six entities — reading as though the last
+entity cost 160 requests when it cost 8. Now recorded as a per-job delta. The local adapter could
+never have exposed this: its request count is incidental, whereas on Google it is the number you
+reach for when deciding whether a 429 was your own fault.
+
+**Measured quota cost:** 8 requests per entity, ~48 per full backup, against a 250/min limiter.
+Roughly 4 seconds per entity, almost all of it API latency.
+
+The two-adapter split stands, and is now load-bearing in the other direction: `LOCAL_FILE` remains
+the development driver so this suite runs without touching Google or consuming quota.

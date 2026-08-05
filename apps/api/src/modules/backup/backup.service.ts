@@ -35,7 +35,12 @@ export class BackupService {
     this.logger.setContext(BackupService.name);
   }
 
-  private spreadsheetFor(entity: BackupEntity): string {
+  /**
+   * Public so verification and the health check resolve a location the SAME way
+   * the export does. A script that computed the target itself could pass while
+   * the real job wrote somewhere else.
+   */
+  spreadsheetFor(entity: BackupEntity): string {
     const { spreadsheetIdPrimary, spreadsheetIdTransactions } = this.config.sheets;
     // Sharded by entity because Sheets caps at 10M cells and a single book
     // cannot hold the stated scale — docs/07 §2's "honest limitation".
@@ -93,6 +98,18 @@ export class BackupService {
     // Counted BEFORE the run. This number is what makes an empty export
     // detectable instead of indistinguishable from an empty table.
     const rowsExpected = await entity.count(this.prisma);
+
+    /*
+     * `requestCount()` is the adapter's RUNNING TOTAL for the process, so the
+     * per-job figure is a delta. Recording it raw made every SyncJob row report
+     * the cumulative count — the first real Google run produced 112, 120, 128,
+     * 136, 144, 152, 160 across six entities, which reads like the last entity
+     * cost 160 requests when it cost 8. A quota number nobody can trust per run
+     * is worse than none, because it is the number you would reach for when
+     * deciding whether a 429 was your own fault.
+     */
+    const requestsBefore = this.sheets.requestCount();
+    const requestsUsed = (): number => this.sheets.requestCount() - requestsBefore;
 
     const job = await this.prisma.db.syncJob.create({
       data: {
@@ -167,7 +184,7 @@ export class BackupService {
           batchesWritten: batches,
           completedAt: this.clock.now(),
           durationMs: this.clock.nowMs() - (await this.startedMs(job.id)),
-          apiRequests: this.sheets.requestCount(),
+          apiRequests: requestsUsed(),
         },
       });
 
@@ -186,7 +203,7 @@ export class BackupService {
           batchesWritten: batches,
           completedAt: this.clock.now(),
           error: message.slice(0, 1000),
-          apiRequests: this.sheets.requestCount(),
+          apiRequests: requestsUsed(),
         },
       });
 

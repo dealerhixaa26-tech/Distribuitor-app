@@ -49,6 +49,20 @@ export abstract class SheetsPort {
   abstract deleteSheet(location: SheetLocation): Promise<void>;
 
   /**
+   * A READ-ONLY reachability check against one spreadsheet.
+   *
+   * Separated from the write path deliberately: the two ways this integration
+   * fails are "the credentials are wrong" and "nobody shared the spreadsheet
+   * with the service account", and the second returns 403 rather than 404, so
+   * it reads like the first. A probe that authenticates and then reads metadata
+   * tells those apart without writing anything.
+   *
+   * Also the input to the 10.4 health surface — "is the backup target
+   * reachable" should be answerable without waiting for 02:00.
+   */
+  abstract probe(spreadsheetId: string): Promise<{ ok: boolean; detail: string }>;
+
+  /**
    * Requests issued so far. Surfaced onto `SyncJob.apiRequests` so quota
    * consumption is a number someone can look at rather than a guess.
    */

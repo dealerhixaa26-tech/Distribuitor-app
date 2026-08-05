@@ -35,6 +35,15 @@ async function main(): Promise<void> {
 
     console.log(`\n  adapter in use: ${sheets.provider}\n`);
 
+    const usersEntity = BACKUP_ENTITIES.find((e) => e.name === 'Users');
+    const distEntity = BACKUP_ENTITIES.find((e) => e.name === 'Distributors');
+    if (!usersEntity || !distEntity) throw new Error('BACKUP_ENTITIES is missing a core entity');
+
+    // Reuse the service's own resolution. Computing the target independently
+    // here could pass while the real export wrote somewhere else.
+    const usersAt = { spreadsheetId: backup.spreadsheetFor(usersEntity), title: 'Users' };
+    const distAt = { spreadsheetId: backup.spreadsheetFor(distEntity), title: 'Distributors' };
+
     // ── 1. A full run, as the cron runs it ────────────────────────────────
     console.log('── 1. Does a full backup export real rows? ─────────────────');
     const result = await OutboxDispatcherService.asSystem('verify:backup', () =>
@@ -63,14 +72,10 @@ async function main(): Promise<void> {
 
     // ── 2. Masking ───────────────────────────────────────────────────────
     console.log('\n── 2. Did anything sensitive reach the sheet? ──────────────');
-    const distributors = BACKUP_ENTITIES.find((e) => e.name === 'Distributors');
-    const users = BACKUP_ENTITIES.find((e) => e.name === 'Users');
+    const distributors = distEntity;
 
-    const distRows = await sheets.readRows({
-      spreadsheetId: 'hixaa-masters',
-      title: 'Distributors',
-    });
-    const userRows = await sheets.readRows({ spreadsheetId: 'hixaa-masters', title: 'Users' });
+    const distRows = await sheets.readRows(distAt);
+    const userRows = await sheets.readRows(usersAt);
 
     // Compare against the truth in the database rather than trusting the mapper.
     const realHashes = (
@@ -117,7 +122,7 @@ async function main(): Promise<void> {
     console.log('\n── 3. Is a re-run idempotent, not doubled? ─────────────────');
     const firstUserRows = userRows.length;
     await OutboxDispatcherService.asSystem('verify:backup:2', () => backup.runAll({}));
-    const afterRerun = await sheets.readRows({ spreadsheetId: 'hixaa-masters', title: 'Users' });
+    const afterRerun = await sheets.readRows(usersAt);
     check(
       're-running replaces rather than appends',
       afterRerun.length === firstUserRows,
@@ -139,9 +144,9 @@ async function main(): Promise<void> {
     // Corrupt one cell and confirm the diff NOTICES. A diff that always says
     // "identical" is the backup equivalent of a reconciliation over zero rows.
     const corrupted = afterRerun.map((r, i) => (i === 1 ? [...r.slice(0, 2), 'MUTATED', ...r.slice(3)] : r));
-    await sheets.deleteSheet({ spreadsheetId: 'hixaa-masters', title: 'Users' });
-    await sheets.ensureSheet({ spreadsheetId: 'hixaa-masters', title: 'Users' });
-    await sheets.appendRows({ spreadsheetId: 'hixaa-masters', title: 'Users' }, corrupted);
+    await sheets.deleteSheet(usersAt);
+    await sheets.ensureSheet(usersAt);
+    await sheets.appendRows(usersAt, corrupted);
 
     const dirty = await OutboxDispatcherService.asSystem('verify:restore:dirty', () =>
       restore.dryRun('Users'),
@@ -157,9 +162,8 @@ async function main(): Promise<void> {
 
     // ── 5. The zero-row guard ────────────────────────────────────────────
     console.log('\n── 5. Does an empty export FAIL rather than publish? ───────');
-    if (!users) throw new Error('Users entity is missing from BACKUP_ENTITIES');
     const fakeEntity = {
-      ...users,
+      ...usersEntity,
       name: 'ZeroRowProbe',
       // Claims rows exist, then yields none — exactly the shape of the
       // scope-filtered read that made every background job silently empty.

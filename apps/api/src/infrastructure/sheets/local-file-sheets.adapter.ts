@@ -160,6 +160,11 @@ export class LocalFileSheetsAdapter extends SheetsPort {
     if (await this.storage.exists(key)) await this.storage.delete(key);
   }
 
+  /** Always reachable — the target is a local directory. */
+  async probe(spreadsheetId: string): Promise<{ ok: boolean; detail: string }> {
+    return { ok: true, detail: `local CSV directory sheets-backup/${spreadsheetId}` };
+  }
+
   requestCount(): number {
     return this.requests;
   }

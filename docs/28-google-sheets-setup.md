@@ -4,8 +4,10 @@
 > Google one. Nothing in the application changes — it is a service account, two spreadsheets, and
 > four environment variables.
 >
-> **Nobody has run this yet.** `GoogleSheetsAdapter` is written and compiled but has never made a
-> request (ADR-0023). Expect to find at least one thing wrong on the first attempt, and see §7.
+> ✅ **This has now been done and verified** (2026-08-05). The adapter worked on first contact —
+> authentication, sheet creation, chunked append, staging swap, read-back and the restore diff all
+> succeeded against the live API. The two things that *did* go wrong were configuration, and both
+> are called out below: `SHEETS_ENABLED=True` (§5) and an unquoted private key (§5).
 
 ---
 
@@ -86,6 +88,11 @@ swaps — so a failed run never leaves a half-written sheet that looks complete.
 
 ## 5. Configure the application
 
+> ⚠️ **`SHEETS_ENABLED=true`, lower case.** The parser accepts `true | false | 1 | 0` and nothing
+> else, so `True` makes the API **refuse to boot** naming the variable. It fails closed rather than
+> quietly disabling backups, which is the intent — but it is the first thing that went wrong when
+> this was set up for real.
+
 ```bash
 SHEETS_ENABLED=true
 SHEETS_SERVICE_ACCOUNT_EMAIL=hixaa-dms-backup@hixaa-dms-backup.iam.gserviceaccount.com
@@ -110,7 +117,29 @@ silently does nothing is the failure this whole module is designed against.
 
 ## 6. Verify it
 
-Restart both processes so the adapter is re-selected, then:
+**Start read-only.** This authenticates and reads metadata without writing anything, and it tells
+the two failure modes apart — see §7:
+
+```bash
+pnpm --filter @hixaa/api build && node apps/api/dist/scripts/verify-sheets-connection.js
+```
+
+```
+adapter:         GOOGLE
+service account: hixaa-dms-backup@…iam.gserviceaccount.com
+✓ 1mNBny2p…QDec  (Users, Products, Distributors)
+    authenticated and readable · 4 tab(s): Sheet1, Users, Products, Distributors
+✓ 1-1kBfPb…s0KA  (Orders, Payments, Inventory)
+```
+
+Then the full end-to-end suite — export, masking, chunking, staging swap, restore diff and the
+zero-row guard, against the live API:
+
+```bash
+node apps/api/dist/scripts/verify-backup.js
+```
+
+Restart both processes so the adapter is re-selected, then exercise the endpoint:
 
 ```bash
 curl -X POST http://localhost:4000/api/v1/backup/sheets/sync -H "Authorization: Bearer $TOKEN"
@@ -135,7 +164,8 @@ diff and the zero-row guard end to end.
 
 ## 7. What to expect to go wrong first
 
-Honest list, because this adapter has never run:
+These are the ones anticipated before the adapter had ever run. In the event, the first live setup
+hit only the two configuration problems in §5 — but the list below still holds for a fresh server:
 
 | Symptom | Almost certainly |
 |---|---|
@@ -146,11 +176,33 @@ Honest list, because this adapter has never run:
 | Works, then fails at ~10M cells | The shard limit in §0. Split further, or accept Sheets is not the recovery path |
 
 The retry/backoff policy honours a `Retry-After` header and otherwise backs off exponentially over
-five attempts. Those numbers are written against Google's published limits and have not been
-observed in practice — if the first real run behaves differently, that is the thing to correct, and
-it is confined to `google-sheets.adapter.ts`.
+five attempts. Those numbers are written against Google's published limits and **have still not been
+observed under real pressure** — the first live runs never approached the quota (§9), so the backoff
+path remains the least-tested code in the adapter. If a large export ever behaves oddly, start
+there; it is confined to `google-sheets.adapter.ts`.
 
 ## 8. Turning it off
 
 `SHEETS_ENABLED=false` reverts to the local CSV adapter. Nothing else changes; no code, no
 migration. The spreadsheets are left exactly as they were.
+
+---
+
+## 9. Measured, once it was real
+
+From the first live runs, so these are observations rather than estimates:
+
+| | |
+|---|---|
+| Requests per entity | **8** |
+| Requests per full backup | **~48**, against a 250/min limiter |
+| Time per entity | ~4 s, almost entirely API latency |
+| Rows exported | Users 7 · Products 14 · Distributors 2 · Orders 5 · Payments 10 · Inventory 2 |
+
+`SyncJob.apiRequests` records the **per-run** figure. It initially recorded the adapter's running
+process total — 112, 120, 128… across six entities — which read as though the last entity cost 160
+requests when it cost 8. Fixed. If that number ever looks implausible again, distrust it before you
+distrust the quota.
+
+Both spreadsheets keep the default `Sheet1` tab Google creates. Harmless; the backup never touches
+it. Delete it by hand if you prefer a tidy book.

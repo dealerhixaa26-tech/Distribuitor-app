@@ -240,6 +240,54 @@ export class GoogleSheetsAdapter extends SheetsPort {
     });
   }
 
+  /**
+   * Authenticate, then read metadata. Nothing is written.
+   *
+   * The two failures are told apart on purpose, because their errors do not
+   * distinguish themselves: a token exchange that fails is a credentials
+   * problem, whereas a token that works followed by a 403 is a SHARING problem
+   * — the spreadsheet was never shared with the service account. Google returns
+   * 403 rather than 404 there, so without this split it reads like bad
+   * credentials and sends you back to the key.
+   */
+  async probe(spreadsheetId: string): Promise<{ ok: boolean; detail: string }> {
+    try {
+      await this.token();
+    } catch (error) {
+      return {
+        ok: false,
+        detail:
+          `AUTH FAILED — the service account could not get a token. Check ` +
+          `SHEETS_SERVICE_ACCOUNT_EMAIL and SHEETS_PRIVATE_KEY (quoted, literal \\n). ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+
+    try {
+      const titles = (await this.sheets(spreadsheetId)).map((s) => s.title);
+      return {
+        ok: true,
+        detail: `authenticated and readable · ${titles.length} tab(s): ${titles.join(', ') || '(none yet)'}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('403')) {
+        return {
+          ok: false,
+          detail:
+            `NOT SHARED — the token works, so the credentials are fine, but the service ` +
+            `account cannot open this spreadsheet. Share it with ` +
+            `${this.config.sheets.serviceAccountEmail} as Editor. (Google returns 403, not ` +
+            `404, which is why this reads like a credentials failure and is not one.)`,
+        };
+      }
+      if (message.includes('404')) {
+        return { ok: false, detail: `NOT FOUND — no spreadsheet with id ${spreadsheetId}` };
+      }
+      return { ok: false, detail: message };
+    }
+  }
+
   requestCount(): number {
     return this.requests;
   }
