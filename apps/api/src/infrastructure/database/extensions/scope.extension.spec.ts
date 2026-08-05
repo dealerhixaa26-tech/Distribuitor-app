@@ -135,6 +135,37 @@ describe('scope extension — who is exempt', () => {
     expect(JSON.stringify(where)).toContain('"in":[]');
   });
 
+  /*
+   * ADR-0021. A SYSTEM principal and an unauthenticated request produced the
+   * SAME context shape — actorType aside, both have no `access` — so every
+   * background job was scoped to the empty set. The jobs did not fail; they
+   * succeeded over zero rows, which is why three phases went by without anyone
+   * noticing that the nightly drift alarm could not fire.
+   *
+   * These two tests are a matched pair and must be read together: the first
+   * asserts the fix, the second asserts what the fix must NOT do.
+   */
+  it('leaves a SYSTEM principal unfiltered — a background job owns the dataset', () => {
+    const result = RequestContextStore.asSystem('nightly-reconciliation', 'req-1', () =>
+      applyScope('Warehouse', { where: { isActive: true } } as Record<string, unknown>),
+    );
+
+    // Unfiltered: exactly the caller's own filter, no scope predicate appended.
+    expect(result?.where).toEqual({ isActive: true });
+    expect(JSON.stringify(result?.where)).not.toContain('"in":[]');
+  });
+
+  it('STILL denies an unauthenticated USER context — the control that must not move', () => {
+    // The middleware sets actorType USER on every request, authenticated or
+    // not. Only `asSystem()` sets SYSTEM, so widening the SYSTEM branch must
+    // leave this path exactly as it was.
+    const result = RequestContextStore.run({ requestId: 'test', actorType: 'USER' } as never, () =>
+      applyScope('Warehouse', {} as Record<string, unknown>),
+    );
+
+    expect(JSON.stringify(result?.where)).toContain('"in":[]');
+  });
+
   it('denies a TERRITORY caller holding no territories', () => {
     const where = whereFor(
       { ...TERRITORY_ACCESS, territoryIds: [] },

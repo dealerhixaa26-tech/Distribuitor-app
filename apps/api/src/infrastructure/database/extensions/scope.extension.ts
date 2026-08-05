@@ -105,6 +105,28 @@ export function applyScope<T extends ScopableArgs | undefined>(
   // worker's own bootstrapping. Those run as the system principal.
   if (!context || context.bypassScope) return args;
 
+  /*
+   * A SYSTEM principal is a background job — a cron sweep, an outbox consumer,
+   * a backup. It has no user and no territory, and the whole dataset is exactly
+   * its legitimate remit: reconciling every balance against the ledger is
+   * meaningless over a subset.
+   *
+   * This branch exists because the `!access` case below was written to fail
+   * closed on an UNAUTHENTICATED REQUEST, and `asSystem()` produces a context
+   * of the same shape — actorType SYSTEM, no access. Conflating the two meant
+   * every background job read `id IN ()`: the nightly reconciliation checked
+   * zero balances and reported `clean` (ADR-0002's drift alarm, structurally
+   * unable to fire), reservation expiry released nothing, and low-stock never
+   * alerted. All three succeeded loudly while doing nothing. Found in Phase 10
+   * by running the jobs twice, once with scope bypassed, and comparing.
+   *
+   * Note the asymmetry that makes this safe: `actorType` is set to SYSTEM in
+   * exactly one place — `RequestContextStore.asSystem()` — and the HTTP
+   * middleware always sets USER. No request path can reach this line. See
+   * ADR-0021.
+   */
+  if (context.actorType === 'SYSTEM') return args;
+
   const access = context.access;
   // An authenticated caller always has resolved access. Its absence means the
   // request is unauthenticated, and an unauthenticated read of a scoped model

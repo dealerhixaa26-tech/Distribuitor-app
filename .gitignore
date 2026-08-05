@@ -67,3 +67,7 @@ apps/api/prisma/migrations/dev.db*
 *.pem
 *.key
 !**/tsconfig*.json
+
+# Claude Code — machine-local permission grants. `.claude/launch.json` IS shared:
+# it is how the dev servers are started, and it must include the worker.
+.claude/settings.local.json

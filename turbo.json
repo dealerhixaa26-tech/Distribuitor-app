@@ -12,6 +12,15 @@
       "cache": false,
       "persistent": true
     },
+    // The worker is a SEPARATE task rather than part of `dev`, because
+    // `apps/api` has two entrypoints and turbo runs one script per task name.
+    // Without this, `turbo run dev` starts the API and silently omits the
+    // worker — which is how a dead worker went unnoticed from Phase 6 to
+    // Phase 9. The root `dev` script runs both task names for that reason.
+    "dev:worker": {
+      "cache": false,
+      "persistent": true
+    },
     "lint": {
       "dependsOn": ["^build"],
       "outputs": []
