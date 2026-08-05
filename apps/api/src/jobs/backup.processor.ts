@@ -8,6 +8,7 @@ import { MailService } from '../infrastructure/mail/mail.service';
 import { OutboxDispatcherService } from '../infrastructure/outbox/outbox-dispatcher.service';
 import { BackupService } from '../modules/backup/backup.service';
 import { DatabaseBackupService } from '../modules/backup/database-backup.service';
+import { JobHeartbeatService, STALE_AFTER } from '../modules/health/job-heartbeat.service';
 
 /**
  * The Sheets backup, scheduled and on demand.
@@ -22,6 +23,7 @@ export class BackupProcessor extends WorkerHost {
     private readonly database: DatabaseBackupService,
     private readonly mail: MailService,
     private readonly config: AppConfigService,
+    private readonly heartbeat: JobHeartbeatService,
     private readonly logger: PinoLogger,
   ) {
     super();
@@ -40,6 +42,7 @@ export class BackupProcessor extends WorkerHost {
     if (!this.config.queue.workerEnabled || !this.config.backup.enabled) return;
 
     await OutboxDispatcherService.asSystem('database-backup', async () => {
+      await this.heartbeat.track('database-backup', STALE_AFTER.DAILY, async () => {
       const result = await this.database.run();
 
       // Reported on success too. A nightly green line is what makes its absence
@@ -53,6 +56,10 @@ export class BackupProcessor extends WorkerHost {
         sizeBytes: result.encryptedBytes,
         durationSeconds: result.durationSeconds,
         error: result.error,
+      });
+      // A backup job that RAN but produced nothing is a failed backup, and the
+      // heartbeat must say so rather than recording a clean run.
+      if (result.status !== 'success') throw new Error(result.error ?? 'backup failed');
       });
     });
   }
@@ -70,6 +77,7 @@ export class BackupProcessor extends WorkerHost {
     if (!this.config.queue.workerEnabled || !this.config.backup.enabled) return;
 
     await OutboxDispatcherService.asSystem('backup-rehearsal', async () => {
+      await this.heartbeat.track('backup-rehearsal', STALE_AFTER.MONTHLY, async () => {
       const result = await this.database.rehearse();
 
       await this.mail.sendOps('backup-report', {
@@ -88,7 +96,10 @@ export class BackupProcessor extends WorkerHost {
           { tables: result.restoredTables, rows: result.restoredRows },
           'Restore rehearsal passed — the backup is provably restorable',
         );
+      } else {
+        throw new Error(result.error ?? (result.mismatches.join(' · ') || 'rehearsal failed'));
       }
+      });
     });
   }
 
@@ -113,7 +124,9 @@ export class BackupProcessor extends WorkerHost {
     if (!this.config.queue.workerEnabled) return;
 
     await OutboxDispatcherService.asSystem('sheets-backup-scheduled', async () => {
-      await this.run({ isScheduled: true });
+      await this.heartbeat.track('sheets-backup', STALE_AFTER.DAILY, () =>
+        this.run({ isScheduled: true }),
+      );
     });
   }
 

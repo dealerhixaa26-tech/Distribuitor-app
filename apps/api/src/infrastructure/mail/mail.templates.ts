@@ -74,6 +74,15 @@ export interface OpsTemplateData {
   'sheets-sync-failed': { entity: string; rowsProcessed: number; error: string };
   'error-spike': { count: number; windowMinutes: number; topError: string };
   /**
+   * The daily slow-query digest. Aggregated by query SHAPE — one query at 2.2s
+   * is noise, the same query 400 times is a missing index.
+   */
+  'slow-query-digest': {
+    windowHours: number;
+    thresholdMs: number;
+    queries: Array<{ shape: string; count: number; avgMs: number; maxMs: number }>;
+  };
+  /**
    * The ledger and the derived balances disagree (ADR-0002). This is an
    * operator emergency and deliberately NOT a business template: it says
    * nothing a partner should see, and it needs to reach someone who can stop
@@ -456,6 +465,26 @@ export function renderOps<T extends OpsTemplate>(
         subject: `[Hixaa DMS] Error spike: ${d.count} errors in ${d.windowMinutes}m`,
         html: opsLayout(title, rows, d.topError),
         text: asText(title, rows, d.topError),
+      };
+    }
+
+    case 'slow-query-digest': {
+      const d = data as OpsTemplateData['slow-query-digest'];
+      const title = `\u{1F40C} Slow queries — ${d.queries.length} shape(s) over ${d.thresholdMs}ms`;
+      const rows: Array<[string, string]> = [
+        ['Window', `${d.windowHours}h`],
+        ['Threshold', `${d.thresholdMs}ms`],
+        ['Distinct shapes', String(d.queries.length)],
+        ['Total slow calls', String(d.queries.reduce((n, q) => n + q.count, 0))],
+      ];
+      // Ordered by total time cost, so the first line is the one worth fixing.
+      const body = d.queries
+        .map((q) => `${String(q.count).padStart(5)}x  avg ${q.avgMs}ms  max ${q.maxMs}ms\n       ${q.shape}`)
+        .join('\n\n');
+      return {
+        subject: `[Hixaa DMS] ${d.queries.length} slow query shape(s) in the last ${d.windowHours}h`,
+        html: opsLayout(title, rows, body),
+        text: asText(title, rows, body),
       };
     }
 

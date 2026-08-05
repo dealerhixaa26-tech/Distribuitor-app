@@ -3404,3 +3404,67 @@ model SyncJob {
   @@index([direction, status])
   @@map("sync_job")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MONITORING (Phase 10.4)
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum HeartbeatStatus {
+  /// Reporting in. Used by the worker's own liveness signal.
+  ALIVE
+  /// The last run of this job finished cleanly.
+  SUCCESS
+  /// The last run threw. `lastError` says what.
+  FAILED
+}
+
+/// Liveness for things that do not serve HTTP.
+///
+/// ── Why this table exists ──────────────────────────────────────────────────
+///
+/// The worker could not boot between Phase 6 and Phase 9 and NOTHING NOTICED,
+/// because a dead worker's only symptom is work silently not happening. The API
+/// has `/health/live` and `/health/ready`; the worker had no surface at all, so
+/// its silence and its health looked identical from outside.
+///
+/// One row per signal: `worker` for process liveness, plus one per scheduled
+/// job. That makes "did the nightly reconciliation actually run last night?"
+/// answerable with a query rather than by grepping logs that have since
+/// rotated.
+model JobHeartbeat {
+  /// The signal: 'worker', or the job's name — 'stock-reconciliation',
+  /// 'database-backup'. A natural key, because there is exactly one current
+  /// state per signal and a surrogate id would only invite duplicates.
+  name String @id
+
+  status HeartbeatStatus
+
+  /// Last time this signal reported AT ALL, success or failure. Staleness is
+  /// measured from here.
+  lastSeenAt DateTime @map("last_seen_at") @db.Timestamptz(3)
+  /// Last time it reported SUCCESS. Distinct from lastSeenAt on purpose: a job
+  /// failing every hour is very much alive and still completely broken.
+  lastSuccessAt DateTime? @map("last_success_at") @db.Timestamptz(3)
+
+  lastDurationMs Int?    @map("last_duration_ms")
+  lastError      String? @map("last_error")
+
+  /// How long this signal may go quiet before it counts as stale. Per signal
+  /// because a 30-second heartbeat and a monthly rehearsal cannot share a
+  /// threshold.
+  staleAfterSeconds Int @map("stale_after_seconds")
+
+  /// Process start time and build, so a worker that is silently crash-looping
+  /// is visible as a bootedAt that keeps moving.
+  bootedAt DateTime? @map("booted_at") @db.Timestamptz(3)
+  version  String?
+
+  runCount     Int @default(0) @map("run_count")
+  failureCount Int @default(0) @map("failure_count")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([lastSeenAt])
+  @@map("job_heartbeat")
+}

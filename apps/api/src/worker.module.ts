@@ -21,6 +21,8 @@ import { InvoicePdfService } from './modules/finance/invoice-pdf.service';
 import { QuotationPdfService } from './modules/sales/quotation-pdf.service';
 import { SettingsModule } from './modules/settings/settings.module';
 import { BackupModule } from './modules/backup/backup.module';
+import { HealthModule } from './modules/health/health.module';
+import { HeartbeatProcessor } from './jobs/heartbeat.processor';
 
 /**
  * Worker composition root.
@@ -84,6 +86,12 @@ import { BackupModule } from './modules/backup/backup.module';
     // Brings the Sheets backup and its adapter choice. The nightly @Cron lives
     // in BackupProcessor below.
     BackupModule,
+    /*
+     * The heartbeat. @Global, but §4.22 again: it must be imported HERE for the
+     * worker's jobs to resolve it. Without this line every scheduled job fails
+     * to construct — loudly, at boot, which is the right failure.
+     */
+    HealthModule,
     ScheduleModule.forRoot(),
   ],
   providers: [
@@ -92,6 +100,7 @@ import { BackupModule } from './modules/backup/backup.module';
     InventoryProcessor,
     NotificationsProcessor,
     BackupProcessor,
+    HeartbeatProcessor,
     /*
      * Provided DIRECTLY rather than by importing `IntelligenceModule`, which
      * would pull Finance → Sales into a process that needs neither. The service

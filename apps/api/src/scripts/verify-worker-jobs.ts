@@ -54,10 +54,28 @@ async function main(): Promise<void> {
     // schedules are identified by their cron expression rather than by name.
     const expressions = [...jobs.values()].map((j) => String(j.cronTime.source));
     console.log(`  ${jobs.size} cron job(s): ${expressions.join('  |  ')}`);
+
+    /*
+     * Asserted by EXPRESSION, not by count. A bare count passes when a job is
+     * swapped for a different one, and this file exists because a job silently
+     * not running went unnoticed for three phases.
+     */
+    const required: Array<[string, string]> = [
+      ['stock reconciliation, 2am', '0 02 * * *'],
+      ['reservation expiry, hourly', '0 0-23/1 * * *'],
+      ['low-stock alert, 8am', '0 08 * * *'],
+      ['retention purge, 3am', '0 03 * * *'],
+      ['database backup, 01:30', '30 1 * * *'],
+      ['restore rehearsal, monthly', '0 4 1 * *'],
+      ['sheets backup, 2am', '0 2 * * *'],
+    ];
+    const missing = required.filter(([, expr]) => !expressions.includes(expr));
     check(
-      'six schedules registered (3 inventory + 3 maintenance)',
-      jobs.size === 6,
-      `found ${jobs.size}`,
+      'every critical schedule is registered',
+      missing.length === 0,
+      missing.length === 0
+        ? `${jobs.size} registered, including all ${required.length} critical ones`
+        : `MISSING: ${missing.map(([label]) => label).join(', ')}`,
     );
 
     // ── 2 & 3. Execution, and whether it can see the data ──────────────────

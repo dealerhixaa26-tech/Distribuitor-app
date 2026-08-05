@@ -8,6 +8,7 @@ import { AppConfigService } from '../config/app-config.service';
 import { PrismaService } from '../infrastructure/database/prisma.service';
 import { MailService } from '../infrastructure/mail/mail.service';
 import { OutboxDispatcherService } from '../infrastructure/outbox/outbox-dispatcher.service';
+import { JobHeartbeatService, STALE_AFTER } from '../modules/health/job-heartbeat.service';
 
 
 /**
@@ -28,6 +29,7 @@ export class MaintenanceProcessor extends WorkerHost {
     private readonly mail: MailService,
     private readonly config: AppConfigService,
     private readonly dispatcher: OutboxDispatcherService,
+    private readonly heartbeat: JobHeartbeatService,
     private readonly logger: PinoLogger,
     @InjectQueue(QUEUE_NAMES.EMAIL) email: Queue,
     @InjectQueue(QUEUE_NAMES.NOTIFICATIONS) notifications: Queue,
@@ -59,7 +61,9 @@ export class MaintenanceProcessor extends WorkerHost {
   async recoverStuckOutboxEvents(): Promise<void> {
     if (!this.config.queue.workerEnabled) return;
     await OutboxDispatcherService.asSystem('outbox-recovery', async () => {
-      await this.dispatcher.recoverStuck();
+      await this.heartbeat.track('outbox-recovery', STALE_AFTER.FREQUENT, () =>
+        this.dispatcher.recoverStuck(),
+      );
     });
   }
 
@@ -80,6 +84,7 @@ export class MaintenanceProcessor extends WorkerHost {
 
     const threshold = this.config.queue.depthAlertThreshold;
 
+    await this.heartbeat.track('queue-monitor', STALE_AFTER.TEN_MINUTES, async () => {
     for (const [name, queue] of Object.entries(this.queues)) {
       try {
         const [waiting, failed] = await Promise.all([
@@ -99,6 +104,7 @@ export class MaintenanceProcessor extends WorkerHost {
         this.logger.error({ err: error, queue: name }, 'Queue monitoring failed for this queue');
       }
     }
+    });
   }
 
   /**
@@ -113,6 +119,7 @@ export class MaintenanceProcessor extends WorkerHost {
     if (!this.config.queue.workerEnabled) return;
 
     await OutboxDispatcherService.asSystem('retention-purge', async () => {
+      await this.heartbeat.track('retention-purge', STALE_AFTER.DAILY, async () => {
       const now = new Date();
       const ninetyDaysAgo = new Date(now.getTime() - 90 * 86_400_000);
 
@@ -145,6 +152,7 @@ export class MaintenanceProcessor extends WorkerHost {
       } catch (error) {
         this.logger.error({ err: error }, 'Retention purge failed');
       }
+      });
     });
   }
 }
