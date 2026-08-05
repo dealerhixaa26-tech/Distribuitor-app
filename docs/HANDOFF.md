@@ -30,7 +30,7 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
 | **Branch** | `main` — clean, pushed |
-| **Size** | ~55,000 source lines · 80 tables · 13 migrations · 230 endpoints · 368 tests |
+| **Size** | ~54,800 source lines · 80 tables · 14 migrations · 231 endpoints · 368 tests |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
 
 ### Phase status
@@ -324,7 +324,7 @@ and the Phase 8 finance models — `invoice` and `payment` (via distributor OR c
 Phase 7 strategy unchanged), `taxNote` (via the invoice it corrects), and `ledgerEntry` (which had to
 have its columns reshaped in migration 0012 before it could be scoped at all — see §4.20).
 
-Seventeen live entries.
+Eighteen live entries.
 
 The rest of the catalog — products, categories, price lists, discount rules, tax rates — is
 company-wide reference data and deliberately NOT scoped.
@@ -408,11 +408,16 @@ The user expects, and has consistently valued:
 
 - **Design before code**, and recording *why* — ADRs for reversible-but-costly decisions.
 - **Verification by execution**, not assertion. Boot the process, hit the endpoint, check the
-  database. A green build has twice coexisted with a completely broken security control here, and
-  Phase 8 found three more bugs this way after a clean typecheck (`docs/24` §3).
-  `scripts/phase-8-smoke.sh` runs 19 such checks against a live API — re-run it rather than
-  trusting the completion record.
-- **Honest reporting** — say what is deferred and why; flag when a recommendation was wrong
-  (ADR-0006 reverses an earlier one).
+  database. A green build has twice coexisted with a completely broken security control here;
+  Phase 8 found three more bugs this way after a clean typecheck (`docs/24` §3), and Phase 9 found
+  that **the worker had not booted for three phases** (§2 above).
+  Two smoke suites live in `scripts/` — `phase-8-smoke.sh` (19 checks) and `phase-9-smoke.sh`
+  (24 checks). **Re-run them rather than trusting a completion record.**
+- **Measure before building the fast version.** ADR-0019 dropped the materialised views `docs/08`
+  §10 had specified in Phase 0, after timing the aggregates at 10× projected volume. A performance
+  plan written before there is data to test it against is a hypothesis, not a decision.
+- **Honest reporting** — say what is deferred and why; flag when a recommendation was wrong.
+  Two ADRs now reverse earlier decisions: **0006** (defer the Prisma 7 upgrade) and **0019**
+  (no materialised views). Both say plainly what changed and why.
 - **Comments that explain the reasoning**, not the mechanics.
 - Phase completion records in `docs/` and a commit per phase, merged to `main` and pushed.
