@@ -37,3 +37,5 @@ export * from './finance/invoice.schema';
 export * from './finance/payment.schema';
 export * from './finance/ledger.schema';
 export * from './finance/gst-return.schema';
+export * from './intelligence/analytics.schema';
+export * from './intelligence/report.schema';

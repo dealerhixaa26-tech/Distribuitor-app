@@ -199,6 +199,13 @@ KPI cards (revenue MTD, orders today, outstanding, low-stock count) each with a 
 delta; sales trend line; revenue by territory (map or bar); top products and top distributors;
 inventory health; recent activity feed.
 
-Every panel reads a **materialised view** through a 5-minute Redis cache, and each is independently
-suspended so a slow panel never blocks the page. Every card links through to the filtered list that
-produced it — a number the user cannot drill into is a number they will not trust.
+Each panel is independently suspended so a slow one never blocks the page, and every card links
+through to the filtered list that produced it — a number the user cannot drill into is a number they
+will not trust.
+
+> ⚠️ **Superseded in part by ADR-0019.** This section originally specified that every panel read a
+> **materialised view** through a 5-minute Redis cache. Phase 9 measured the aggregates first: at
+> ten times a generous three-year projection the whole dashboard computes in ~108 ms, so the views
+> would have bought ~100 ms on a minority of requests while making a KPI card disagree with the list
+> it links to. **The 5-minute cache stays; the materialised views were dropped.** See ADR-0019 for
+> the measurement table and the conditions for revisiting.

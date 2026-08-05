@@ -124,6 +124,13 @@ export const ROLE_DEFINITIONS: readonly RoleDefinition[] = [
       P.INVOICE_SEND, P.INVOICE_EXPORT,
       // Note: no INVOICE_CREATE — drafting and issuing stay separate.
       P.PAYMENT_READ, P.PAYMENT_VERIFY, P.PAYMENT_ALLOCATE, P.PAYMENT_UPDATE,
+      // PAYMENT_DELETE gates ledger write-offs and adjustments. It was held by
+      // no business role until Phase 9 — only SUPER_ADMIN — which made writing
+      // off bad debt a system-administration task and, with a single admin
+      // account, impossible above the approval threshold. Deciding what the
+      // company will not collect is a Finance Manager's job; found by trying to
+      // exercise the approval chain (docs/26 §4).
+      P.PAYMENT_DELETE,
       P.DISTRIBUTOR_READ, P.DISTRIBUTOR_CREDIT_UPDATE,
       P.CUSTOMER_READ, P.ORDER_READ, P.PRODUCT_READ, P.PRICELIST_READ,
       // ORDER_APPROVE is required for the credit-limit override, not for

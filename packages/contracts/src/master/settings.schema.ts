@@ -85,6 +85,13 @@ export const financeDefaultsSchema = z.object({
   invoicePrefix: z.string().trim().min(1).max(20),
   orderPrefix: z.string().trim().min(1).max(20),
   roundInvoiceToWholeRupee: z.boolean().default(true),
+  /**
+   * Above this, a write-off needs a second authoriser (Phase 8's obligation on
+   * Phase 9). A setting rather than a constant: "how much may one person
+   * forgive" is commercial policy, and policy that needs a deploy to change is
+   * policy that stops being followed.
+   */
+  writeOffApprovalThreshold: positiveMoneySchema.default('10000'),
 });
 
 /**

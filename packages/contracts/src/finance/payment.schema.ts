@@ -275,6 +275,16 @@ export const writeOffSchema = z.object({
     .min(10, 'A write-off must be explained — it is money the company will not collect')
     .max(500),
   entryDate: dateOnlySchema.optional(),
+  /**
+   * A second authoriser, required above `finance.writeOffApprovalThreshold`.
+   *
+   * Accepted in the body rather than inferred, because unlike verification —
+   * where the verifier IS the caller — the person keying a write-off is
+   * recording someone else's decision. The service refuses when this equals the
+   * requester, and when the named approver does not actually hold the
+   * authority: otherwise "approved by" is a name in a field, not a control.
+   */
+  approvedById: idSchema.optional(),
 });
 
 export type WriteOffDto = z.infer<typeof writeOffSchema>;

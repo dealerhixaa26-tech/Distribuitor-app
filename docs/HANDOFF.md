@@ -1,7 +1,7 @@
 # HANDOFF — Hixaa DMS
 
 > Everything a new session needs to continue this build without re-deriving it.
-> Last updated at the end of Phase 8. Read this before touching code.
+> Last updated at the end of Phase 9. Read this before touching code.
 
 ---
 
@@ -30,7 +30,7 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
 | **Branch** | `main` — clean, pushed |
-| **Size** | ~50,270 source lines · 77 tables · 12 migrations · 206 endpoints · 346 tests |
+| **Size** | ~55,000 source lines · 80 tables · 13 migrations · 230 endpoints · 368 tests |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
 
 ### Phase status
@@ -45,18 +45,22 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | 6 — Inventory | ✅ Complete — `docs/19-phase-6-design.md` · `docs/20-phase-6-completion.md` |
 | 7 — Sales | ✅ Complete — `docs/21-phase-7-design.md` · `docs/22-phase-7-completion.md` |
 | 8 — Finance | ✅ Complete — `docs/23-phase-8-design.md` · `docs/24-phase-8-completion.md` |
-| **9 — Reporting** | ❌ **NOT STARTED — now the critical path** |
-| 10 — Integrations | ❌ Not started |
+| 9 — Intelligence | ✅ Complete — `docs/25-phase-9-design.md` · `docs/26-phase-9-completion.md` |
+| **10 — Integrations** | ❌ **NOT STARTED — now the critical path** |
 | 11 — Deployment | ❌ Not started |
 
 Phases were built 1→2→3→5→4→6→7: Phase 4 was skipped at the owner's request and picked up after 5.
 
-**Phase 9 (Reporting) is now the critical path.** All four obligations Phase 7 placed on Phase 8
-are discharged — see `docs/24` §5.
+**Phase 10 (Integrations) is now the critical path.** Both obligations Phase 8 placed on Phase 9
+are discharged and proven — see `docs/26` §5.
 
-⚠️ **Phase 8 places two obligations on Phase 9** (`docs/24` §8):
-stock valuation must EXCLUDE `DISTRIBUTOR` warehouses (those goods are already sold — ADR-0014 §4),
-and the write-off approval chain belongs with Phase 9's other financial approvals.
+🔴 **READ THIS FIRST: the worker did not boot between Phase 6 and Phase 9.** `worker.module.ts`
+never imported `AuthModule`, whose `@Global` export `EncryptionService` is needed by
+`DistributorsService`, which `InventoryModule` pulls in. Every worker start died with
+`UnknownDependenciesException`. **The outbox dispatcher runs in the worker, so no domain event had
+ever actually been dispatched** — 47 accumulated events fired on the first successful boot.
+Fixed in Phase 9 (`docs/26` §3). **Anything that depends on the worker has therefore never run and
+should be re-verified**, including the quotation email in §8 below.
 
 ---
 
@@ -239,6 +243,25 @@ paid leaves an invoice issued and unsettled again. Guarding `issue()` with that 
 invoice be re-issued, burning a second statutory number before the trigger rejected it — a 500 with
 a gap in the series. Guard the ACTION on `status !== 'DRAFT'`; use the table only for status moves.
 
+### 4.22 `@Global` only reaches a composition that IMPORTS the module
+`AuthModule` is `@Global` and exports `EncryptionService`. The API imports it, so the service is
+available everywhere there. The WORKER never imported it — and `@Global` registers nothing in a
+composition that has not imported the module at least once, so every worker boot died with
+`UnknownDependenciesException` from Phase 6 until Phase 9. Providing the service at the worker's own
+root does NOT fix it either: Nest resolves a dependency in **its own module's** context, so the
+provider has to reach `DistributorsModule`. Import the module.
+
+### 4.23 A process that fails at boot fails SILENTLY if nothing checks it
+The above went unnoticed for three phases because the API boots independently and a dead worker's
+only symptom is work not happening. **After changing module wiring, boot BOTH processes.**
+`pnpm dev` starts them together; a `pnpm verify` pass says nothing about either.
+
+### 4.24 Measure before building the fast version
+`docs/08` §10 specified materialised views in Phase 0, before any data existed. Phase 9 measured the
+aggregates at ten times a generous projection: the whole dashboard computes in ~108 ms. The views
+were dropped (ADR-0019), and the doc that specified them now points at the ADR. **A performance
+plan written before there is data to test is a hypothesis.**
+
 ## 5. Architecture in one screen
 
 ```
@@ -249,7 +272,7 @@ packages/contracts   ⭐ Zod schemas — the single source of truth for every DT
                         OpenAPI, React Hook Form, and both apps' types.
 ```
 
-Eighteen ADRs in `docs/adr/`. The ones that constrain daily work:
+Twenty ADRs in `docs/adr/`. The ones that constrain daily work:
 
 - **0002** Inventory will be a ledger + derived balance, never a mutable counter.
 - **0003** Authorization is scoped at the **repository** layer via a Prisma extension, so
@@ -284,6 +307,10 @@ Eighteen ADRs in `docs/adr/`. The ones that constrain daily work:
   The sign lives in exactly one expression.
 - **0018** VERIFYING a payment is the financial event; recording one is a memo with no ledger effect.
   Allocation requires a verified receipt, and the verifier may not be the recorder.
+- **0019** Dashboard aggregates run ON DEMAND behind a 5-minute cache. **No materialised views** —
+  measured at 10× projected volume before deciding. Reverses a Phase 0 assumption in `docs/08` §10.
+- **0020** Reports are a fixed CATALOGUE with validated parameters, never a query builder. No user
+  input becomes SQL, which is what keeps every report inside the scope extension.
 
 ### Scoped entities so far
 `SCOPE_REGISTRY` in `infrastructure/database/scope-registry.ts`:
@@ -304,21 +331,22 @@ company-wide reference data and deliberately NOT scoped.
 
 ---
 
-## 6. What Phase 9 must deliver
+## 6. What Phase 10 must deliver
 
-From `docs/05-roadmap.md` §Phase 9 — reporting and intelligence on top of everything now recorded.
+From `docs/05-roadmap.md` §Phase 10 — integrations and operations.
 
-**Two obligations inherited from Phase 8** (`docs/24` §8):
+**Two things Phase 9 leaves for Phase 10** (`docs/26` §9):
 
-- **Stock valuation must EXCLUDE `DISTRIBUTOR` warehouses.** Those goods are already sold; counting
-  them overstates assets (ADR-0014 §4). Carried forward from Phase 7 and still outstanding.
-- **The write-off approval chain** belongs here, with the other financial approvals. The
-  `WRITE_OFF` ledger entry type and the permission exist; the workflow around them does not.
+- **Re-verify everything that depends on the worker.** It could not boot between Phase 6 and
+  Phase 9 (§2 above), so the outbox dispatcher, the email processor, and the quotation-email
+  handler in §8 have never actually run. Their state is unknown rather than known-good.
+- **Wire the scheduled-report runner.** `ReportDefinition` stores a validated cron expression and
+  recipients, and a CHECK refuses an active schedule with no recipients. Nothing executes it yet;
+  it belongs with the worker's other `@Cron` jobs.
 
-**Reuse, do not rebuild:** `OutstandingService` (aging, and the credit-exposure term),
-`LedgerService.statement()`, `GstReturnsService`, and `DocumentRendererService` for any PDF export.
-`agingBucketFor()` and `daysPastDue()` in `@hixaa/contracts` are the ONLY implementations of that
-date arithmetic — a second one in SQL is how a report comes to disagree with the screen it summarises.
+**Reuse, do not rebuild:** `ReportsService` (the catalogue and its CSV writer), `AnalyticsService`,
+`NotificationsService` (already consuming the outbox), `OutstandingService`, `GstReturnsService`,
+and `DocumentRendererService`.
 
 ## 7. Open questions for the user
 
@@ -350,16 +378,20 @@ Still unanswered from `docs/12-recommendations.md` §E:
   until there is a documented amendment policy.
 - **Backorder allocation is manual** — `POST /orders/:id/reserve` re-attempts it. Deliberate:
   allocating scarce stock between waiting customers is a commercial judgement (ADR-0012 §4).
-- **Quotation email** — the outbox event fires on send; the worker's PDF-attachment handler is not
-  written, so nothing is actually delivered yet. `GET /quotations/:id/pdf` works.
+- **Quotation email** — the outbox event fires on send and the PDF-attachment handler is still not
+  written. ⚠️ Note that this was ALSO masked by the worker being dead (§2): re-verify rather than
+  assuming the handler is the only thing missing. `GET /quotations/:id/pdf` works.
 - **ClamAV and S3 drivers** — interfaces and state machines exist; both **throw at boot** if
   selected, rather than silently degrading.
 - **Google Sheets backup** — designed in `docs/07-integrations.md`, not built (Phase 10).
-- **Integration/E2E tests** — only unit tests exist (346: 185 contracts + 161 API). Every phase
+- **Integration/E2E tests** — only unit tests exist (368: 196 contracts + 172 API). Every phase
   has instead been verified by booting the API and driving it with `curl` against a real database,
   which has repeatedly caught what unit tests could not. Testcontainers is specified in
   `docs/09-testing-strategy.md` but still not wired — this is the largest testing gap.
 - **`/api/v1/*` route warning** on boot is a harmless Nest 11 / Express 5 deprecation.
+- **Scheduled reports** — the schedule is stored and validated; no cron runner executes it (Phase 10).
+- **XLSX / PDF report export** — CSV works end to end; the other formats are accepted and not rendered.
+- **SSE notifications** — deliberately polled instead; a Phase 11 decision (`docs/26` §6).
 - **e-Invoice / e-Way Bill** — columns (`irn`, `ackNumber`, `signedQrCode`, `ewayBillNumber`) and the
   adapter seam exist; no live GSP calls. Hixaa's turnover does not require e-invoicing yet.
 - **GSTR-2A/2B reconciliation** — purchase-side, and there is no purchase document in the schema.

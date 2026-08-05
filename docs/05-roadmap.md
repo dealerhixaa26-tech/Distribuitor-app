@@ -179,7 +179,7 @@ note — with the ledger balancing at every step.
 |---|---|---|
 | 9.1 | **Dashboard** | KPI cards, sales trend, revenue, inventory health, recent activity |
 | 9.2 | **Analytics** | Distributor performance, product performance, regional sales, target vs achievement |
-| 9.3 | **Materialised views** | Pre-aggregation + concurrent refresh worker |
+| 9.3 | ~~**Materialised views**~~ | **Dropped — see ADR-0019.** Replaced by targeted indexes and the 5-minute Redis cache, after measuring the aggregates at 10× projected volume |
 | 9.4 | **Reports** | Builder, saved reports, PDF/Excel/CSV export via background jobs |
 | 9.5 | **Scheduled reports** | Cron definitions, emailed on the business channel |
 | 9.6 | **Notifications** | In-app + email, preferences, SSE stream |
