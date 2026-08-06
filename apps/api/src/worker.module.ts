@@ -23,6 +23,8 @@ import { SettingsModule } from './modules/settings/settings.module';
 import { BackupModule } from './modules/backup/backup.module';
 import { HealthModule } from './modules/health/health.module';
 import { HeartbeatProcessor } from './jobs/heartbeat.processor';
+import { ScheduledReportsProcessor } from './jobs/scheduled-reports.processor';
+import { IntelligenceModule } from './modules/intelligence/intelligence.module';
 
 /**
  * Worker composition root.
@@ -92,6 +94,14 @@ import { HeartbeatProcessor } from './jobs/heartbeat.processor';
      * to construct — loudly, at boot, which is the right failure.
      */
     HealthModule,
+    /*
+     * Brings ReportsService for the schedule runner. Imported wholesale rather
+     * than provided directly — unlike NotificationsService and the two PDF
+     * renderers, ReportsService pulls the analytics, finance and document graph
+     * it genuinely needs to compute a report, so cherry-picking providers would
+     * mean reconstructing that graph by hand and keeping it in sync.
+     */
+    IntelligenceModule,
     ScheduleModule.forRoot(),
   ],
   providers: [
@@ -101,6 +111,7 @@ import { HeartbeatProcessor } from './jobs/heartbeat.processor';
     NotificationsProcessor,
     BackupProcessor,
     HeartbeatProcessor,
+    ScheduledReportsProcessor,
     /*
      * Provided DIRECTLY rather than by importing `IntelligenceModule`, which
      * would pull Finance → Sales into a process that needs neither. The service

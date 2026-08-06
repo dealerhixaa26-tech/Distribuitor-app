@@ -69,4 +69,57 @@ export const RequestContextStore = {
   asSystem<T>(label: string, requestId: string, fn: () => T): T {
     return storage.run({ requestId, actorType: 'SYSTEM', actorLabel: label }, fn);
   },
+
+  /**
+   * Runs `fn` as a specific USER, with that user's resolved access.
+   *
+   * ── Why a background job would ever want this ──────────────────────────────
+   *
+   * A scheduled report is background work, but it must NOT run as SYSTEM. Since
+   * ADR-0021 the system principal reads unscoped, which is right for a
+   * reconciliation sweep over every warehouse and catastrophically wrong for a
+   * report: a territory-scoped manager's monthly sales summary would be
+   * computed over every territory and emailed to them.
+   *
+   * So a scheduled report runs as the person who scheduled it, seeing exactly
+   * what they would see running it by hand. `actorType` is USER, so the scope
+   * extension applies the predicate normally.
+   *
+   * ⚠️ DELIBERATELY `async`, and it AWAITS `fn` inside `storage.run`. This is
+   * load-bearing, not style.
+   *
+   * Prisma operations are LAZY: `prisma.x.count()` builds a `PrismaPromise`
+   * that does not execute until it is awaited. If this wrapper merely returned
+   * `storage.run(ctx, fn)`, the context would exit the moment `fn` handed back
+   * an unresolved promise, and the extension's `query` hook — where
+   * `applyScope` runs — would fire OUTSIDE it. `applyScope` would then see no
+   * ambient context at all, and its no-context branch returns the query
+   * UNFILTERED.
+   *
+   * Measured, with west.manager (TERRITORY-scoped, 4 territories) against 2
+   * distributors in different zones:
+   *
+   *   asUser(p, () => prisma.distributor.count())        → 2   UNSCOPED
+   *   asUser(p, async () => prisma.distributor.count())  → 1   scoped
+   *
+   * Awaiting inside makes the callback shape irrelevant, so a caller cannot get
+   * this wrong. The same hazard exists for `asSystem`, where it is harmless by
+   * luck — losing the context there yields the unscoped read it wanted anyway.
+   * Here it would email one manager every territory's data.
+   */
+  async asUser<T>(
+    params: { userId: string; access: EffectiveAccess; label: string; requestId: string },
+    fn: () => T | Promise<T>,
+  ): Promise<T> {
+    return storage.run(
+      {
+        requestId: params.requestId,
+        userId: params.userId,
+        actorType: 'USER',
+        actorLabel: params.label,
+        access: params.access,
+      },
+      async () => await fn(),
+    );
+  },
 };
