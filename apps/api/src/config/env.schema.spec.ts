@@ -67,6 +67,12 @@ describe('environment validation', () => {
       CORS_ORIGINS: 'https://dms.hixaa.com',
       FEATURE_SWAGGER: 'false',
       MAIL_BUSINESS_DRIVER: 'log',
+      // ADR-0022: production must have somewhere to send an ops alert.
+      MAIL_OPS_DRIVER: 'log',
+      MAIL_OPS_TO: 'hixaa.ops@gmail.com',
+      // ADR-0024: production must take encrypted backups.
+      BACKUP_ENABLED: 'true',
+      BACKUP_GPG_RECIPIENT: 'ops@hixaa.com',
     };
 
     it('accepts a well-formed production configuration', () => {
@@ -101,6 +107,57 @@ describe('environment validation', () => {
       expect(() =>
         validateEnv({ ...productionEnv, MAIL_BUSINESS_DRIVER: 'smtp', MAIL_BUSINESS_PASSWORD: '' }),
       ).toThrow(/MAIL_BUSINESS_PASSWORD/);
+    });
+
+    /*
+     * ADR-0022. A production deployment with no ops recipient cannot tell you
+     * anything is wrong — queue backlogs, dead letters, failed backups, health
+     * failures and token-reuse alerts all route there and would be recorded as
+     * UNDELIVERABLE and read by nobody.
+     *
+     * Development deliberately still boots without one, because a developer
+     * without a Gmail app password must be able to run the whole system.
+     */
+    it('refuses to boot in production with no ops alert recipient', () => {
+      expect(() => validateEnv({ ...productionEnv, MAIL_OPS_TO: '' })).toThrow(/MAIL_OPS_TO/);
+    });
+
+    it('requires ops SMTP credentials when the ops smtp driver is selected', () => {
+      expect(() =>
+        validateEnv({ ...productionEnv, MAIL_OPS_DRIVER: 'smtp', MAIL_OPS_PASSWORD: '' }),
+      ).toThrow(/MAIL_OPS_PASSWORD/);
+    });
+
+    /*
+     * ADR-0024. A production deployment with backups off, or with backups
+     * written in plaintext, is not a deployment anyone should be able to make
+     * by forgetting a variable. Both refuse at boot rather than being
+     * discovered on the day a restore is needed.
+     */
+    it('refuses to boot in production with backups disabled', () => {
+      expect(() => validateEnv({ ...productionEnv, BACKUP_ENABLED: 'false' })).toThrow(
+        /BACKUP_ENABLED/,
+      );
+    });
+
+    it('refuses to boot in production with an UNENCRYPTED backup', () => {
+      expect(() => validateEnv({ ...productionEnv, BACKUP_GPG_RECIPIENT: '' })).toThrow(
+        /BACKUP_GPG_RECIPIENT/,
+      );
+    });
+
+    it('still allows development to run with backups off', () => {
+      // A developer must be able to run the system without generating a GPG
+      // keypair first.
+      expect(() =>
+        validateEnv({ ...baseEnv, BACKUP_ENABLED: 'false', BACKUP_GPG_RECIPIENT: '' }),
+      ).not.toThrow();
+    });
+
+    it('still allows development to run with no ops recipient', () => {
+      // The guard is production-only on purpose: making it universal would stop
+      // every developer without a Gmail app password from booting at all.
+      expect(() => validateEnv({ ...baseEnv, MAIL_OPS_TO: '' })).not.toThrow();
     });
   });
 

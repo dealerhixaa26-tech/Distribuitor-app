@@ -60,6 +60,7 @@ export class AppConfigService {
       prefix: this.get('QUEUE_PREFIX'),
       concurrency: this.get('QUEUE_CONCURRENCY'),
       workerEnabled: this.get('WORKER_ENABLED'),
+      depthAlertThreshold: this.get('QUEUE_DEPTH_ALERT_THRESHOLD'),
     };
   }
 
@@ -150,6 +151,20 @@ export class AppConfigService {
         accessKeyId: this.get('S3_ACCESS_KEY_ID'),
         secretAccessKey: this.get('S3_SECRET_ACCESS_KEY'),
       },
+    };
+  }
+
+  get backup() {
+    return {
+      enabled: this.get('BACKUP_ENABLED'),
+      dir: this.get('BACKUP_DIR'),
+      gpgRecipient: this.get('BACKUP_GPG_RECIPIENT'),
+      cron: this.get('BACKUP_CRON'),
+      keepDaily: this.get('BACKUP_KEEP_DAILY'),
+      keepWeekly: this.get('BACKUP_KEEP_WEEKLY'),
+      keepMonthly: this.get('BACKUP_KEEP_MONTHLY'),
+      rehearsalDb: this.get('BACKUP_REHEARSAL_DB'),
+      rehearsalCron: this.get('BACKUP_REHEARSAL_CRON'),
     };
   }
 

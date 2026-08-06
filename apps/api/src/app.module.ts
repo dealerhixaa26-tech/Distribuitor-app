@@ -18,6 +18,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { DistributorsModule } from './modules/distributors/distributors.module';
 import { DocumentsModule } from './modules/documents/documents.module';
+import { BackupModule } from './modules/backup/backup.module';
 import { HealthModule } from './modules/health/health.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { IntelligenceModule } from './modules/intelligence/intelligence.module';
@@ -78,6 +79,7 @@ import { UsersModule } from './modules/users/users.module';
     FinanceModule,
     IntelligenceModule,
     AuditModule,
+    BackupModule,
     HealthModule,
   ],
   providers: [

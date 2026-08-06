@@ -30,7 +30,13 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix(prefix, {
     // Health checks must be reachable at a stable path for Docker and uptime
     // monitors, independent of the API version prefix.
-    exclude: ['health/live', 'health/ready'],
+    //
+    // `health/worker` belongs here for the same reason: it is the endpoint an
+    // external uptime check watches to notice a dead worker, and a monitor
+    // should not have to know the API version to ask "is the worker alive?".
+    // Leaving it under /api/v1 would also mean two different base paths in one
+    // monitoring configuration, which is how one of them ends up unwatched.
+    exclude: ['health/live', 'health/ready', 'health/worker', 'health/jobs'],
   });
 
   app.use(

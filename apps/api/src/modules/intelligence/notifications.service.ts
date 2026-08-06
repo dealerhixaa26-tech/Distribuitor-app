@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { PERMISSIONS, type Permission } from '@hixaa/contracts';
+import { DOMAIN_EVENTS, PERMISSIONS, type DomainEvent, type Permission } from '@hixaa/contracts';
 import type { Prisma } from '@prisma/client';
 import { PinoLogger } from 'nestjs-pino';
 import { ClockService } from '../../common/utils/clock.service';
@@ -33,19 +33,47 @@ import type { PrismaTransaction } from '../../infrastructure/database/prisma.ser
  */
 
 /** Which permission makes someone a plausible recipient for an event. */
-const EVENT_AUDIENCE: Record<string, Permission> = {
-  'order.submitted': PERMISSIONS.ORDER_APPROVE,
-  'order.approved': PERMISSIONS.ORDER_READ,
-  'order.rejected': PERMISSIONS.ORDER_READ,
-  'order.cancelled': PERMISSIONS.ORDER_READ,
-  'shipment.dispatched': PERMISSIONS.ORDER_READ,
-  'payment.recorded': PERMISSIONS.PAYMENT_VERIFY,
-  'payment.verified': PERMISSIONS.PAYMENT_READ,
-  'invoice.issued': PERMISSIONS.INVOICE_READ,
-  'invoice.overdue': PERMISSIONS.PAYMENT_READ,
-  'stock.low': PERMISSIONS.INVENTORY_ADJUST,
-  'pricelist.published': PERMISSIONS.PRICELIST_READ,
-  'distributor.catalog.changed': PERMISSIONS.DISTRIBUTOR_READ,
+/**
+ * Who hears about what, by permission.
+ *
+ * ⚠️ Keyed by `DomainEvent`, NOT by string literal. This map was written with
+ * literals and carried two that matched nothing:
+ *
+ *   'stock.low'                   → the constant is 'inventory.stock_low'
+ *   'distributor.catalog.changed' → the constant is 'distributor.catalog_changed'
+ *
+ * Both silently resolved to no audience, so every low-stock alert and every
+ * catalog change produced zero notifications. That is the SAME defect as the
+ * one in `NotificationsProcessor.describe()` and it sat one function away from
+ * it — fixing the processor alone left low-stock still broken, because it then
+ * died here instead. Literals cannot be allowed anywhere on this path.
+ */
+export const EVENT_AUDIENCE: Partial<Record<DomainEvent, Permission>> = {
+  // ── Sales ──────────────────────────────────────────────────────────────
+  [DOMAIN_EVENTS.ORDER_SUBMITTED]: PERMISSIONS.ORDER_APPROVE,
+  [DOMAIN_EVENTS.ORDER_APPROVED]: PERMISSIONS.ORDER_READ,
+  [DOMAIN_EVENTS.ORDER_REJECTED]: PERMISSIONS.ORDER_READ,
+  [DOMAIN_EVENTS.ORDER_CANCELLED]: PERMISSIONS.ORDER_READ,
+  [DOMAIN_EVENTS.QUOTATION_ACCEPTED]: PERMISSIONS.QUOTATION_READ,
+  [DOMAIN_EVENTS.SHIPMENT_DISPATCHED]: PERMISSIONS.ORDER_READ,
+  [DOMAIN_EVENTS.SHIPMENT_DELIVERED]: PERMISSIONS.ORDER_READ,
+
+  // ── Finance ────────────────────────────────────────────────────────────
+  [DOMAIN_EVENTS.PAYMENT_RECORDED]: PERMISSIONS.PAYMENT_VERIFY,
+  [DOMAIN_EVENTS.PAYMENT_VERIFIED]: PERMISSIONS.PAYMENT_READ,
+  [DOMAIN_EVENTS.INVOICE_ISSUED]: PERMISSIONS.INVOICE_READ,
+  [DOMAIN_EVENTS.INVOICE_OVERDUE]: PERMISSIONS.PAYMENT_READ,
+  [DOMAIN_EVENTS.CREDIT_LIMIT_BREACHED]: PERMISSIONS.PAYMENT_READ,
+
+  // ── Inventory & catalog ────────────────────────────────────────────────
+  [DOMAIN_EVENTS.STOCK_LOW]: PERMISSIONS.INVENTORY_ADJUST,
+  [DOMAIN_EVENTS.PRICE_LIST_PUBLISHED]: PERMISSIONS.PRICELIST_READ,
+
+  // ── Channel ────────────────────────────────────────────────────────────
+  [DOMAIN_EVENTS.DISTRIBUTOR_CATALOG_CHANGED]: PERMISSIONS.DISTRIBUTOR_READ,
+  [DOMAIN_EVENTS.DISTRIBUTOR_SUSPENDED]: PERMISSIONS.DISTRIBUTOR_READ,
+  [DOMAIN_EVENTS.DISTRIBUTOR_DOCUMENT_EXPIRING]: PERMISSIONS.DISTRIBUTOR_UPDATE,
+  [DOMAIN_EVENTS.DISTRIBUTOR_CREDIT_LIMIT_CHANGED]: PERMISSIONS.DISTRIBUTOR_READ,
 };
 
 @Injectable()
@@ -138,9 +166,15 @@ export class NotificationsService {
       excludeUserId?: string | null;
     },
   ): Promise<number> {
-    const permission = EVENT_AUDIENCE[input.eventType];
+    const permission = EVENT_AUDIENCE[input.eventType as DomainEvent];
     if (!permission) {
-      this.logger.debug({ eventType: input.eventType }, 'No audience mapped — no notification');
+      // WARN, not debug. Reaching here means the processor built a message and
+      // then found nobody to send it to — the message was composed and thrown
+      // away. That is how low-stock alerts disappeared for four phases.
+      this.logger.warn(
+        { eventType: input.eventType },
+        'Notification composed but NO AUDIENCE is mapped for this event — discarding',
+      );
       return 0;
     }
 

@@ -14,7 +14,17 @@ import { InventoryProcessor } from './jobs/inventory.processor';
 import { EmailProcessor } from './jobs/email.processor';
 import { MaintenanceProcessor } from './jobs/maintenance.processor';
 import { NotificationsProcessor } from './jobs/notifications.processor';
+import { BackupProcessor } from './jobs/backup.processor';
 import { NotificationsService } from './modules/intelligence/notifications.service';
+import { DocumentRendererModule } from './modules/documents/document-renderer.module';
+import { InvoicePdfService } from './modules/finance/invoice-pdf.service';
+import { QuotationPdfService } from './modules/sales/quotation-pdf.service';
+import { SettingsModule } from './modules/settings/settings.module';
+import { BackupModule } from './modules/backup/backup.module';
+import { HealthModule } from './modules/health/health.module';
+import { HeartbeatProcessor } from './jobs/heartbeat.processor';
+import { ScheduledReportsProcessor } from './jobs/scheduled-reports.processor';
+import { IntelligenceModule } from './modules/intelligence/intelligence.module';
 
 /**
  * Worker composition root.
@@ -62,6 +72,36 @@ import { NotificationsService } from './modules/intelligence/notifications.servi
     AuthModule,
     // Brings the reconciliation, reservation-expiry, and low-stock jobs.
     InventoryModule,
+    /*
+     * Supplies the shared pdfmake shell the two PDF services render into.
+     *
+     * ⚠️ `SettingsModule` must come with it. `DocumentRendererService` needs
+     * `SettingsService` for the letterhead's company identity, and
+     * `SettingsModule` is @Global — which, exactly as §4.22 of the handoff
+     * records for `AuthModule`, registers NOTHING in a composition that has not
+     * imported it at least once. The API imports it and works; the worker did
+     * not, and adding the renderer alone killed the worker at boot with a
+     * completely clean typecheck. The same trap, one phase later.
+     */
+    DocumentRendererModule,
+    SettingsModule,
+    // Brings the Sheets backup and its adapter choice. The nightly @Cron lives
+    // in BackupProcessor below.
+    BackupModule,
+    /*
+     * The heartbeat. @Global, but §4.22 again: it must be imported HERE for the
+     * worker's jobs to resolve it. Without this line every scheduled job fails
+     * to construct — loudly, at boot, which is the right failure.
+     */
+    HealthModule,
+    /*
+     * Brings ReportsService for the schedule runner. Imported wholesale rather
+     * than provided directly — unlike NotificationsService and the two PDF
+     * renderers, ReportsService pulls the analytics, finance and document graph
+     * it genuinely needs to compute a report, so cherry-picking providers would
+     * mean reconstructing that graph by hand and keeping it in sync.
+     */
+    IntelligenceModule,
     ScheduleModule.forRoot(),
   ],
   providers: [
@@ -69,12 +109,24 @@ import { NotificationsService } from './modules/intelligence/notifications.servi
     MaintenanceProcessor,
     InventoryProcessor,
     NotificationsProcessor,
+    BackupProcessor,
+    HeartbeatProcessor,
+    ScheduledReportsProcessor,
     /*
      * Provided DIRECTLY rather than by importing `IntelligenceModule`, which
      * would pull Finance → Sales into a process that needs neither. The service
      * depends only on Prisma, the clock and the logger.
      */
     NotificationsService,
+    /*
+     * Same reasoning, for the two PDF renderers the email processor attaches to
+     * `quotation.sent` and `invoice.issued`. Both depend only on Prisma,
+     * `DocumentRendererService` and the logger — importing SalesModule and
+     * FinanceModule instead would drag the whole sales and finance graph into
+     * the worker to reach two `render()` methods.
+     */
+    QuotationPdfService,
+    InvoicePdfService,
   ],
 })
 export class WorkerModule {}

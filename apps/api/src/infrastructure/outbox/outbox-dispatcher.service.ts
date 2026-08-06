@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
-import { EVENT_QUEUE_ROUTING, QUEUE_NAMES, type QueueName } from '@hixaa/contracts';
+import {
+  EVENT_QUEUE_ROUTING,
+  QUEUE_NAMES,
+  type DomainEvent,
+  type QueueName,
+} from '@hixaa/contracts';
 import type { Queue } from 'bullmq';
 import { PinoLogger } from 'nestjs-pino';
 import { RequestContextStore } from '../../common/context/request-context';
@@ -153,14 +158,38 @@ export class OutboxDispatcherService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async dispatch(event: ClaimedEvent): Promise<boolean> {
-    const queueName = EVENT_QUEUE_ROUTING[event.event_type];
+    const eventType = event.event_type as DomainEvent;
+    // Three-way, and the three cases mean different things: a queue, a
+    // deliberate `null`, or `undefined` for a type the table has never heard of.
+    const queueName: QueueName | null | undefined = Object.hasOwn(
+      EVENT_QUEUE_ROUTING,
+      eventType,
+    )
+      ? EVENT_QUEUE_ROUTING[eventType]
+      : undefined;
 
-    if (!queueName) {
-      // An event nobody consumes is not a failure — it is an event whose
-      // consumer has not been built yet. Mark it processed and move on rather
-      // than retrying it five times and parking it in the DLQ.
+    if (queueName === undefined) {
+      /*
+       * An event type that is not in the routing table at all. Since the table
+       * is now `Record<DomainEvent, …>`, this can only mean a row whose
+       * event_type is not a declared domain event — a producer writing a raw
+       * string, or a row surviving from a rename. That is a defect, not a
+       * routing decision, so it is logged as one rather than quietly consumed.
+       */
       await this.markProcessed(event.id);
-      this.logger.debug({ eventType: event.event_type }, 'No queue route; marked processed');
+      this.logger.error(
+        { eventId: event.id, eventType },
+        'Outbox event has an UNDECLARED type — not in EVENT_QUEUE_ROUTING',
+      );
+      return true;
+    }
+
+    if (queueName === null) {
+      // A deliberate `null` in the routing table: this event is recorded for
+      // audit and has no consumer by decision. Distinct from the case above,
+      // which is an accident.
+      await this.markProcessed(event.id);
+      this.logger.debug({ eventType }, 'Event routed to null by decision; marked processed');
       return true;
     }
 

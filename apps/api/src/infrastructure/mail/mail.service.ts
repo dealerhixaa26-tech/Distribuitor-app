@@ -10,7 +10,7 @@ import {
   type OpsTemplate,
   type OpsTemplateData,
 } from './mail.templates';
-import type { MailTransport } from './mail.transport';
+import type { MailAttachment, MailTransport } from './mail.transport';
 
 export const BUSINESS_TRANSPORT = Symbol('BUSINESS_TRANSPORT');
 export const OPS_TRANSPORT = Symbol('OPS_TRANSPORT');
@@ -48,6 +48,7 @@ export class MailService {
     template: T,
     to: string,
     data: BusinessTemplateData[T],
+    attachments?: MailAttachment[],
   ): Promise<void> {
     const rendered = renderBusiness(template, data);
     await this.dispatch({
@@ -59,6 +60,7 @@ export class MailService {
       html: rendered.html,
       text: rendered.text,
       replyTo: this.config.mailBusiness.replyTo,
+      attachments,
     });
   }
 
@@ -72,12 +74,37 @@ export class MailService {
    */
   async sendOps<T extends OpsTemplate>(template: T, data: OpsTemplateData[T]): Promise<void> {
     const recipient = this.config.mailOps.to;
+    const rendered = renderOps(template, data);
+
+    /*
+     * ADR-0022. An alert that cannot be delivered is still RECORDED.
+     *
+     * This used to return early, before the EmailLog row was written, so an
+     * unconfigured ops mailbox turned every alert into a log line and nothing
+     * else — including a `critical` refresh-token-reuse alert, the signature of
+     * token theft. The system detected it, revoked the token family, and then
+     * failed to record that it had tried to tell anyone.
+     *
+     * The row is the evidence. Delivery is an attempt on top of it.
+     */
     if (!recipient) {
-      this.logger.warn({ template }, 'MAIL_OPS_TO is not configured; ops alert not sent');
+      await this.prisma.db.emailLog.create({
+        data: {
+          channel: 'OPS',
+          toAddress: '(unconfigured)',
+          subject: rendered.subject,
+          template,
+          status: 'UNDELIVERABLE',
+          error: 'MAIL_OPS_TO is not configured',
+        },
+      });
+      this.logger.warn(
+        { template, subject: rendered.subject },
+        'MAIL_OPS_TO is not configured — alert recorded as UNDELIVERABLE, not sent',
+      );
       return;
     }
 
-    const rendered = renderOps(template, data);
     await this.dispatch({
       channel: 'OPS',
       transport: this.ops,
@@ -106,6 +133,7 @@ export class MailService {
     html: string;
     text: string;
     replyTo?: string;
+    attachments?: MailAttachment[];
   }): Promise<void> {
     // Logged before sending, so a message that fails mid-flight still leaves a
     // trace. The row records the CHANNEL, making the separation auditable in
@@ -128,6 +156,7 @@ export class MailService {
         html: params.html,
         text: params.text,
         replyTo: params.replyTo,
+        attachments: params.attachments,
       });
 
       await this.prisma.db.emailLog.update({

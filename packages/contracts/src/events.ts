@@ -81,29 +81,83 @@ export const QUEUE_NAMES = {
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 
-/** Which queue an event is dispatched to. Exhaustive by construction. */
-export const EVENT_QUEUE_ROUTING: Readonly<Record<string, QueueName>> = {
+/**
+ * Which queue an event is dispatched to.
+ *
+ * ⚠️ EXHAUSTIVE FOR REAL. The type is `Record<DomainEvent, QueueName | null>`,
+ * so adding an event to `DOMAIN_EVENTS` fails to compile until someone decides
+ * where it goes. This used to be `Record<string, QueueName>` under a comment
+ * claiming it was "exhaustive by construction", which it was not — a plain
+ * string-keyed record checks nothing. Seven events accumulated in the gap:
+ * `payment.verified`, `invoice.overdue` and `order.rejected` had working
+ * handlers that were unreachable because nothing routed them, and four more
+ * were routed to a processor with no case for them.
+ *
+ * `null` means "deliberately has no consumer" and is NOT the same as absent.
+ * Absent was an oversight nobody could see; `null` is a decision on the record.
+ * The dispatcher marks a null-routed event PROCESSED without enqueueing it.
+ */
+export const EVENT_QUEUE_ROUTING: Readonly<Record<DomainEvent, QueueName | null>> = {
+  // ── Identity ────────────────────────────────────────────────────────────
   [DOMAIN_EVENTS.USER_INVITED]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.USER_CREATED]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.USER_PASSWORD_RESET_REQUESTED]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.USER_PASSWORD_CHANGED]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.USER_EMAIL_VERIFICATION_REQUESTED]: QUEUE_NAMES.EMAIL,
+  /// Suspension is an administrative act the user is told about in person.
+  [DOMAIN_EVENTS.USER_SUSPENDED]: null,
+
+  // ── Security: ops channel, never business ───────────────────────────────
   [DOMAIN_EVENTS.SECURITY_TOKEN_REUSE_DETECTED]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.SECURITY_ACCOUNT_LOCKED]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.SECURITY_SENSITIVE_FIELD_CHANGED]: QUEUE_NAMES.EMAIL,
+  /// Audited, and escalated by the error-spike monitor rather than per event —
+  /// one denial is normal, a burst is not.
+  [DOMAIN_EVENTS.SECURITY_PERMISSION_DENIED_REPEATEDLY]: null,
+
+  // ── Channel ─────────────────────────────────────────────────────────────
   [DOMAIN_EVENTS.DISTRIBUTOR_APPROVED]: QUEUE_NAMES.EMAIL,
+  [DOMAIN_EVENTS.DISTRIBUTOR_CREATED]: null,
+  [DOMAIN_EVENTS.DISTRIBUTOR_SUSPENDED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.DISTRIBUTOR_DOCUMENT_EXPIRING]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.DISTRIBUTOR_CREDIT_LIMIT_CHANGED]: QUEUE_NAMES.NOTIFICATIONS,
+
+  // ── Catalog & pricing ───────────────────────────────────────────────────
   // Publishing a price list changes what every assigned partner pays, so it
   // notifies rather than merely being logged.
   [DOMAIN_EVENTS.PRICE_LIST_PUBLISHED]: QUEUE_NAMES.NOTIFICATIONS,
   [DOMAIN_EVENTS.DISTRIBUTOR_CATALOG_CHANGED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.PRODUCT_CREATED]: null,
+  [DOMAIN_EVENTS.PRODUCT_STATUS_CHANGED]: null,
+  [DOMAIN_EVENTS.PRODUCT_PRICE_AFFECTING_CHANGE]: null,
+  [DOMAIN_EVENTS.PRICE_LIST_CLONED]: null,
+  [DOMAIN_EVENTS.DISCOUNT_RULE_CHANGED]: null,
+  [DOMAIN_EVENTS.TAX_RATE_SUPERSEDED]: null,
+
+  // ── Sales ───────────────────────────────────────────────────────────────
   [DOMAIN_EVENTS.QUOTATION_SENT]: QUEUE_NAMES.EMAIL,
-  [DOMAIN_EVENTS.ORDER_APPROVED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.QUOTATION_ACCEPTED]: QUEUE_NAMES.NOTIFICATIONS,
   [DOMAIN_EVENTS.ORDER_SUBMITTED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.ORDER_APPROVED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.ORDER_REJECTED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.ORDER_CANCELLED]: QUEUE_NAMES.NOTIFICATIONS,
   [DOMAIN_EVENTS.SHIPMENT_DISPATCHED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.SHIPMENT_DELIVERED]: QUEUE_NAMES.NOTIFICATIONS,
+
+  // ── Finance ─────────────────────────────────────────────────────────────
   [DOMAIN_EVENTS.INVOICE_ISSUED]: QUEUE_NAMES.EMAIL,
+  [DOMAIN_EVENTS.INVOICE_OVERDUE]: QUEUE_NAMES.NOTIFICATIONS,
   [DOMAIN_EVENTS.PAYMENT_RECORDED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.PAYMENT_VERIFIED]: QUEUE_NAMES.NOTIFICATIONS,
+  [DOMAIN_EVENTS.CREDIT_LIMIT_BREACHED]: QUEUE_NAMES.NOTIFICATIONS,
+
+  // ── Inventory ───────────────────────────────────────────────────────────
   [DOMAIN_EVENTS.STOCK_LOW]: QUEUE_NAMES.NOTIFICATIONS,
+  /// Ledger and balances disagreeing is an operator emergency, not partner news.
   [DOMAIN_EVENTS.STOCK_RECONCILIATION_DRIFT]: QUEUE_NAMES.EMAIL,
+  [DOMAIN_EVENTS.STOCK_ADJUSTED]: null,
+
+  // ── Reporting & integration ─────────────────────────────────────────────
   [DOMAIN_EVENTS.REPORT_READY]: QUEUE_NAMES.EMAIL,
   [DOMAIN_EVENTS.SHEETS_SYNC_COMPLETED]: QUEUE_NAMES.MAINTENANCE,
   [DOMAIN_EVENTS.SHEETS_SYNC_FAILED]: QUEUE_NAMES.EMAIL,

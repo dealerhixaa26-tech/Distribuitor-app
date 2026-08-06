@@ -10,7 +10,10 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev",
+    "dev": "turbo run dev dev:worker",
+    "dev:api": "turbo run dev --filter @hixaa/api",
+    "dev:web": "turbo run dev --filter @hixaa/web",
+    "dev:worker": "turbo run dev:worker",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint -- --fix",
     "typecheck": "turbo run typecheck",

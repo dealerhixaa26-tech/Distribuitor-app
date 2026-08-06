@@ -1,7 +1,7 @@
 # HANDOFF — Hixaa DMS
 
 > Everything a new session needs to continue this build without re-deriving it.
-> Last updated at the end of Phase 9. Read this before touching code.
+> Last updated at the end of Phase 10. Read this before touching code.
 
 ---
 
@@ -30,7 +30,7 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
 | **Branch** | `main` — clean, pushed |
-| **Size** | ~54,800 source lines · 80 tables · 14 migrations · 231 endpoints · 368 tests |
+| **Size** | ~55,700 source lines · 82 tables · 17 migrations · 236 endpoints · 438 tests |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
 
 ### Phase status
@@ -46,21 +46,26 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | 7 — Sales | ✅ Complete — `docs/21-phase-7-design.md` · `docs/22-phase-7-completion.md` |
 | 8 — Finance | ✅ Complete — `docs/23-phase-8-design.md` · `docs/24-phase-8-completion.md` |
 | 9 — Intelligence | ✅ Complete — `docs/25-phase-9-design.md` · `docs/26-phase-9-completion.md` |
-| **10 — Integrations** | ❌ **NOT STARTED — now the critical path** |
-| 11 — Deployment | ❌ Not started |
+| 10 — Integrations | ✅ Complete — `docs/27-phase-10-design.md` · `docs/30-phase-10-completion.md` |
+| **11 — Hardening & Release** | ❌ **NOT STARTED — now the critical path** |
 
 Phases were built 1→2→3→5→4→6→7: Phase 4 was skipped at the owner's request and picked up after 5.
 
-**Phase 10 (Integrations) is now the critical path.** Both obligations Phase 8 placed on Phase 9
-are discharged and proven — see `docs/26` §5.
+**Phase 11 (Hardening & Release) is now the critical path.** Phase 10 placed no obligations on it
+beyond the seed gap in `docs/30` §9.
 
-🔴 **READ THIS FIRST: the worker did not boot between Phase 6 and Phase 9.** `worker.module.ts`
-never imported `AuthModule`, whose `@Global` export `EncryptionService` is needed by
-`DistributorsService`, which `InventoryModule` pulls in. Every worker start died with
-`UnknownDependenciesException`. **The outbox dispatcher runs in the worker, so no domain event had
-ever actually been dispatched** — 47 accumulated events fired on the first successful boot.
-Fixed in Phase 9 (`docs/26` §3). **Anything that depends on the worker has therefore never run and
-should be re-verified**, including the quotation email in §8 below.
+✅ **The worker is now observable.** It could not boot between Phase 6 and Phase 9 (`AuthModule`
+never imported), and — found in Phase 10 — **`pnpm dev` never started it at all**, because
+`turbo.json` had no `dev:worker` task. Both are fixed. It now writes a heartbeat every 30 seconds
+and `GET /health/worker` returns **503** when it stops; every scheduled job records its own run at
+`GET /health/jobs`. A dead worker is no longer indistinguishable from a healthy one.
+
+🔴 **The Phase 10 lesson, which is the one to carry forward:** the danger in this system is not
+failure, it is **success computed over an empty set**. Three cron jobs ran nightly, read an empty
+database and reported `clean` for three phases (ADR-0021). Seven events reached a queue and were
+silently discarded. A backup would have exported zero rows for four of six entities and recorded a
+successful sync. None of it failed; all of it succeeded, doing nothing. Assert on **counts**, never
+on "it ran".
 
 ---
 
@@ -76,9 +81,15 @@ should be re-verified**, including the quotation email in §8 below.
 ```bash
 pnpm install
 pnpm db:migrate && pnpm db:seed     # idempotent
-pnpm dev                            # api :4000 · web :3000 · worker
+pnpm dev                            # api :4000 · web :3000 · worker · contracts watcher
 pnpm verify                         # the gate: lint + typecheck + tests + build
+pnpm dev:api / dev:web / dev:worker  # one at a time
 ```
+
+⚠️ **Never run `pnpm build` while the dev watcher is running.** `nest-cli.json` sets
+`deleteOutDir: true`, so it wipes `dist` under the running process and produces incoherent
+behaviour — routes 404ing, stale handlers — that reads exactly like an application bug. Stop the
+dev server first. This cost a confusing detour in Phase 10.
 
 ### Dev credentials
 
@@ -262,6 +273,55 @@ aggregates at ten times a generous projection: the whole dashboard computes in ~
 were dropped (ADR-0019), and the doc that specified them now points at the ADR. **A performance
 plan written before there is data to test is a hypothesis.**
 
+### 4.25 A SYSTEM principal reads UNSCOPED — and that is why a report must not use it
+`applyScope()` returns unfiltered for `actorType: 'SYSTEM'` (ADR-0021). Before that, `asSystem()`
+produced a context with no `access`, which the extension treated as an unauthenticated request and
+scoped to `id IN ()` — so **every background job read an empty database**. The nightly
+reconciliation checked zero balances and reported `clean` for three phases.
+
+The corollary matters as much as the fix: work that must stay scoped **must not run as SYSTEM**. A
+scheduled report runs inside `RequestContextStore.asUser()` with its owner's resolved access, or it
+would compute a territory manager's figures across every territory and email them.
+
+### 4.26 Prisma is LAZY, so a context helper must AWAIT inside `storage.run`
+`prisma.x.count()` builds a `PrismaPromise` that does not execute until awaited. A helper written
+`storage.run(ctx, fn)` exits the context the moment `fn` returns an unresolved promise, so the scope
+extension's hook fires **outside** it and `applyScope` — finding no context — returns the query
+UNFILTERED:
+
+```
+asUser(p, () => prisma.distributor.count())        → 2   UNSCOPED
+asUser(p, async () => prisma.distributor.count())  → 1   scoped
+```
+
+Same query, same user, different callback shape. `asUser` is `async` and awaits internally so the
+shape cannot matter. **Any new context helper must do the same.** Harmless for `asSystem` by luck —
+losing the context there yields the unscoped read it wanted anyway.
+
+### 4.27 No string literal may key any table on the event path
+An event clears three hand-keyed tables — `EVENT_QUEUE_ROUTING`, the processor's `case`, and
+`EVENT_AUDIENCE`. Two were keyed by literal and drifted: `'stock.low'` where the constant is
+`'inventory.stock_low'`, in **two independent places one function apart**, so fixing either alone
+changed nothing observable. That is why it survived four phases.
+
+Every case now matches `DOMAIN_EVENTS`. `EVENT_QUEUE_ROUTING` is
+`Record<DomainEvent, QueueName | null>`, where `null` means "no consumer, by decision" as distinct
+from absent meaning nobody noticed. `event-plumbing.spec.ts` makes the three tables prove they
+agree — reintroducing the original typo fails to **compile**.
+
+### 4.28 `tsx` cannot run Nest DI code
+esbuild does not implement `emitDecoratorMetadata`, so `design:paramtypes` is never emitted and
+every constructor injection resolves to `undefined`. It presents as an application DI bug and is
+not one. Anything touching the Nest container lives in `src/scripts/` and runs **compiled**
+(`node apps/api/dist/scripts/…`). `prisma/seed` gets away with tsx because it uses no DI.
+
+### 4.29 A verification harness that swallows its own cleanup failure pollutes the database
+`deleteMany` **throws** on a soft-deletable model (§4.2) — and a harness that wrapped cleanup in
+`.catch(() => undefined)` left **sixteen** probe rows across runs while reporting success. Cleanup
+must report failure, not hide it.
+
+---
+
 ## 5. Architecture in one screen
 
 ```
@@ -311,6 +371,13 @@ Twenty ADRs in `docs/adr/`. The ones that constrain daily work:
   measured at 10× projected volume before deciding. Reverses a Phase 0 assumption in `docs/08` §10.
 - **0020** Reports are a fixed CATALOGUE with validated parameters, never a query builder. No user
   input becomes SQL, which is what keeps every report inside the scope extension.
+- **0021** The SYSTEM principal reads UNSCOPED. "System" and "unauthenticated" stopped sharing a
+  branch — conflating them meant every background job read `id IN ()` for three phases.
+- **0022** An ops alert that cannot be delivered is still RECORDED (`EmailLog.UNDELIVERABLE`). An
+  alerting path whose own failure mode is silence rebuilds the defect it exists to catch.
+- **0023** Sheets goes through a port whose LOCAL adapter is real, not a mock — which is what let
+  10.1 be executed and proven before credentials existed. Now also verified live.
+- **0024** A backup is proven by RESTORING it, not by an exit code. Rehearsed, with row counts.
 
 ### Scoped entities so far
 `SCOPE_REGISTRY` in `infrastructure/database/scope-registry.ts`:
@@ -331,22 +398,20 @@ company-wide reference data and deliberately NOT scoped.
 
 ---
 
-## 6. What Phase 10 must deliver
+## 6. What Phase 11 must deliver
 
-From `docs/05-roadmap.md` §Phase 10 — integrations and operations.
+From `docs/05-roadmap.md` §Phase 11 — hardening and release: security review, load test at
+100k distributors / 1M products / 5M order lines, WCAG 2.2 AA audit, production Compose + Nginx +
+TLS, `deploy.sh` / `rollback.sh`, the runbook, UAT, launch.
 
-**Two things Phase 9 leaves for Phase 10** (`docs/26` §9):
+**The one obligation Phase 10 leaves** (`docs/30` §9): **seed an account that is both
+TERRITORY-scoped and holds `analytics:read:financial`.** Every report in the catalogue is financial
+and the only territory-scoped account lacks that permission, so end-to-end *report* scoping is
+proven at the context level rather than through a full scheduled run. §4.14 makes exactly this point.
 
-- **Re-verify everything that depends on the worker.** It could not boot between Phase 6 and
-  Phase 9 (§2 above), so the outbox dispatcher, the email processor, and the quotation-email
-  handler in §8 have never actually run. Their state is unknown rather than known-good.
-- **Wire the scheduled-report runner.** `ReportDefinition` stores a validated cron expression and
-  recipients, and a CHECK refuses an active schedule with no recipients. Nothing executes it yet;
-  it belongs with the worker's other `@Cron` jobs.
-
-**Reuse, do not rebuild:** `ReportsService` (the catalogue and its CSV writer), `AnalyticsService`,
-`NotificationsService` (already consuming the outbox), `OutstandingService`, `GstReturnsService`,
-and `DocumentRendererService`.
+**Reuse, do not rebuild:** the six `verify-*.ts` harnesses in `apps/api/src/scripts/`,
+`scripts/backup.sh` and `restore.sh`, `JobHeartbeatService.track()` for any new scheduled job, and
+`SheetsPort.probe()` for reachability checks.
 
 ## 7. Open questions for the user
 
@@ -378,18 +443,28 @@ Still unanswered from `docs/12-recommendations.md` §E:
   until there is a documented amendment policy.
 - **Backorder allocation is manual** — `POST /orders/:id/reserve` re-attempts it. Deliberate:
   allocating scarce stock between waiting customers is a commercial judgement (ADR-0012 §4).
-- **Quotation email** — the outbox event fires on send and the PDF-attachment handler is still not
-  written. ⚠️ Note that this was ALSO masked by the worker being dead (§2): re-verify rather than
-  assuming the handler is the only thing missing. `GET /quotations/:id/pdf` works.
+- ~~**Quotation email**~~ — ✅ **DONE.** The handler attaches a real 34 KB PDF; `invoice.issued` and
+  `distributor.approved` too. Recipients resolve through the contact tables, since neither
+  `distributor` nor `customer` carries a top-level email.
 - **ClamAV and S3 drivers** — interfaces and state machines exist; both **throw at boot** if
   selected, rather than silently degrading.
-- **Google Sheets backup** — designed in `docs/07-integrations.md`, not built (Phase 10).
+- ~~**Google Sheets backup**~~ — ✅ **DONE and running live against Google.** `docs/28` is the setup
+  guide. Sheets is a CONVENIENCE copy; `pg_dump` (`docs/29`) is the recovery mechanism. Applying a
+  Sheets *restore* is refused by design — see ADR-0024.
 - **Integration/E2E tests** — only unit tests exist (368: 196 contracts + 172 API). Every phase
   has instead been verified by booting the API and driving it with `curl` against a real database,
   which has repeatedly caught what unit tests could not. Testcontainers is specified in
   `docs/09-testing-strategy.md` but still not wired — this is the largest testing gap.
 - **`/api/v1/*` route warning** on boot is a harmless Nest 11 / Express 5 deprecation.
-- **Scheduled reports** — the schedule is stored and validated; no cron runner executes it (Phase 10).
+- **`MAIL_OPS_TO` is unset**, so every ops alert is recorded `UNDELIVERABLE` in `email_log` rather
+  than delivered (ADR-0022). Visible now rather than silent — but nothing is actually emailed.
+  Setting it is a config change, no code. **Production refuses to boot without it.**
+- **No point-in-time recovery.** Nightly `pg_dump` only; up to 24h loss worst case. WAL archiving is
+  a Phase 11 decision to take with the VPS layout (`docs/29` §8).
+- **Sheets retry/backoff is unexercised.** The live runs never approached the quota, so it is the
+  least-tested code in the adapter (`docs/28` §7).
+- ~~**Scheduled reports**~~ — ✅ **DONE.** A minute-by-minute sweep over `nextRunAt`. Reports run as
+  their OWNER, never as SYSTEM (§4.25).
 - **XLSX / PDF report export** — CSV works end to end; the other formats are accepted and not rendered.
 - **SSE notifications** — deliberately polled instead; a Phase 11 decision (`docs/26` §6).
 - **e-Invoice / e-Way Bill** — columns (`irn`, `ackNumber`, `signedQrCode`, `ewayBillNumber`) and the
@@ -412,7 +487,10 @@ The user expects, and has consistently valued:
   Phase 8 found three more bugs this way after a clean typecheck (`docs/24` §3), and Phase 9 found
   that **the worker had not booted for three phases** (§2 above).
   Two smoke suites live in `scripts/` — `phase-8-smoke.sh` (19 checks) and `phase-9-smoke.sh`
-  (24 checks). **Re-run them rather than trusting a completion record.**
+  (24 checks). Phase 10 added six harnesses in `apps/api/src/scripts/`, run COMPILED (§4.28):
+  `verify-worker-jobs` · `verify-backup` · `verify-sheets-connection` · `verify-db-backup` ·
+  `verify-monitoring` · `verify-scheduled-reports`.
+  **Re-run them rather than trusting a completion record.**
 - **Measure before building the fast version.** ADR-0019 dropped the materialised views `docs/08`
   §10 had specified in Phase 0, after timing the aggregates at 10× projected volume. A performance
   plan written before there is data to test it against is a hypothesis, not a decision.

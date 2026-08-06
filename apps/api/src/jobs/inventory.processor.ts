@@ -6,6 +6,7 @@ import { OutboxDispatcherService } from '../infrastructure/outbox/outbox-dispatc
 import { ReconciliationService } from '../modules/inventory/reconciliation.service';
 import { ReservationsService } from '../modules/inventory/reservations.service';
 import { StockService } from '../modules/inventory/stock.service';
+import { JobHeartbeatService, STALE_AFTER } from '../modules/health/job-heartbeat.service';
 
 /**
  * Scheduled inventory housekeeping. Roadmap 6.6, 6.7, 6.8.
@@ -21,6 +22,7 @@ export class InventoryProcessor {
     private readonly reservations: ReservationsService,
     private readonly stock: StockService,
     private readonly config: AppConfigService,
+    private readonly heartbeat: JobHeartbeatService,
     private readonly logger: PinoLogger,
   ) {
     this.logger.setContext(InventoryProcessor.name);
@@ -41,16 +43,20 @@ export class InventoryProcessor {
 
     await OutboxDispatcherService.asSystem('stock-reconciliation', async () => {
       try {
-        const result = await this.reconciliation.reconcile();
-        if (!result.clean) {
-          this.logger.error(
-            {
-              quantityDrifts: result.quantityDrifts.length,
-              reservationDrifts: result.reservationDrifts.length,
-            },
-            'Stock reconciliation found drift — investigate before trusting balances',
-          );
-        }
+        await this.heartbeat.track('stock-reconciliation', STALE_AFTER.DAILY, async () => {
+          const result = await this.reconciliation.reconcile();
+          if (!result.clean) {
+            this.logger.error(
+              {
+                quantityDrifts: result.quantityDrifts.length,
+                reservationDrifts: result.reservationDrifts.length,
+              },
+              'Stock reconciliation found drift — investigate before trusting balances',
+            );
+          }
+        });
+        // Swallowed below so one bad night cannot kill the scheduler. The
+        // heartbeat has already recorded the failure, so it is not lost.
       } catch (error) {
         this.logger.error({ err: error }, 'Stock reconciliation failed');
       }
@@ -70,7 +76,9 @@ export class InventoryProcessor {
 
     await OutboxDispatcherService.asSystem('reservation-expiry', async () => {
       try {
-        await this.reservations.expireStale();
+        await this.heartbeat.track('reservation-expiry', STALE_AFTER.HOURLY, () =>
+          this.reservations.expireStale(),
+        );
       } catch (error) {
         this.logger.error({ err: error }, 'Reservation expiry sweep failed');
       }
@@ -90,8 +98,10 @@ export class InventoryProcessor {
 
     await OutboxDispatcherService.asSystem('low-stock-alert', async () => {
       try {
-        const count = await this.stock.emitLowStockAlerts();
-        if (count > 0) this.logger.warn({ count }, 'Low-stock alerts raised');
+        await this.heartbeat.track('low-stock-alert', STALE_AFTER.DAILY, async () => {
+          const count = await this.stock.emitLowStockAlerts();
+          if (count > 0) this.logger.warn({ count }, 'Low-stock alerts raised');
+        });
       } catch (error) {
         this.logger.error({ err: error }, 'Low-stock alert job failed');
       }

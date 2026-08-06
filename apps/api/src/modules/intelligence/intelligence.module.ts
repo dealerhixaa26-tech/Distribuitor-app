@@ -41,6 +41,10 @@ import { TargetsService } from './targets.service';
   providers: [AnalyticsService, TargetsService, SearchService, ReportsService, NotificationsService],
   // Exported so the worker's NotificationsProcessor can consume the queue that
   // `events.ts` has routed to since Phase 1 but nothing listened on.
-  exports: [AnalyticsService, NotificationsService],
+  // ReportsService is exported for the worker's schedule runner
+  // (`ScheduledReportsProcessor`). Phase 9 stored cron expressions and
+  // recipients; Phase 10 executes them, and it needs the same catalogue the
+  // HTTP route uses rather than a second implementation.
+  exports: [AnalyticsService, NotificationsService, ReportsService],
 })
 export class IntelligenceModule {}
