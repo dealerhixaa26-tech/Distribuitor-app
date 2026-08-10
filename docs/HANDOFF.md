@@ -1,7 +1,7 @@
 # HANDOFF — Hixaa DMS
 
 > Everything a new session needs to continue this build without re-deriving it.
-> Last updated at the end of Phase 10. Read this before touching code.
+> Last updated during Phase 11, after the forms foundation. Read this before touching code.
 
 ---
 
@@ -30,8 +30,11 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
 | **Branch** | `main` — clean, pushed |
-| **Size** | ~55,700 source lines · 82 tables · 17 migrations · 236 endpoints · 438 tests |
+| **Size** | ~58,000 source lines · 82 tables · 17 migrations · 236 endpoints · **453 tests** |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
+
+Tests are 247 API · 196 contracts · **10 web** (the web suite exists as of Phase 11; before that
+`vitest run --passWithNoTests` ran nothing at all).
 
 ### Phase status
 
@@ -47,12 +50,28 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | 8 — Finance | ✅ Complete — `docs/23-phase-8-design.md` · `docs/24-phase-8-completion.md` |
 | 9 — Intelligence | ✅ Complete — `docs/25-phase-9-design.md` · `docs/26-phase-9-completion.md` |
 | 10 — Integrations | ✅ Complete — `docs/27-phase-10-design.md` · `docs/30-phase-10-completion.md` |
-| **11 — Hardening & Release** | ❌ **NOT STARTED — now the critical path** |
+| **11 — Hardening & Release** | 🟡 **IN PROGRESS** |
 
 Phases were built 1→2→3→5→4→6→7: Phase 4 was skipped at the owner's request and picked up after 5.
 
-**Phase 11 (Hardening & Release) is now the critical path.** Phase 10 placed no obligations on it
-beyond the seed gap in `docs/30` §9.
+### Phase 11 progress
+
+| Module | State |
+|---|---|
+| 11.1 Security review | ✅ `docs/31` — `/login` was an enumeration oracle past the lockout threshold; nodemailer 6→9 |
+| 11.2 Load test | ✅ `docs/32` — 69 MB of GIN index nothing could use; 1212 ms → 5.7 ms. ADR-0019 re-measured and STANDS |
+| **Create/edit forms** | 🟡 **Steps 0–2 done — `docs/33-phase-11-forms-foundation.md`.** Form kit + distributor create/edit + transitions. Steps 3–6 (product · price list · quotation · order · invoice issue · payment verify) NOT started |
+| 11.3 Accessibility | ⬜ Deliberately after forms |
+| 11.4–11.6 Deployment | ⬜ Written UNEXECUTED against a documented target (no VPS; ADR-0023 precedent) |
+| 11.7 UAT · 11.8 launch | ⬜ |
+
+⚠️ **One obligation carried into Steps 4–6: idempotency does not exist.** `docs/03 §5` says it is
+*required* on `POST /orders`, `/payments`, `/invoices` and every `/approve`. The `idempotency_key`
+table, the error codes, the nightly purge job, the CORS allowance and `apiFetch`'s own option all
+exist — **no interceptor reads the header.** A double-clicked submit or a retry after the BFF's
+30-second timeout would create a second order or a second payment. Close it before those forms are
+built. `useEntityMutation` deliberately does not send the header, rather than imply a control that
+is not there (`docs/33` §2.6).
 
 ✅ **The worker is now observable.** It could not boot between Phase 6 and Phase 9 (`AuthModule`
 never imported), and — found in Phase 10 — **`pnpm dev` never started it at all**, because
@@ -101,9 +120,15 @@ dev server first. This cost a confusing detour in Phase 10.
 | `west.storekeeper@hixaa.test` | `storekeeper-nagpur-2026` | INVENTORY_MANAGER, scoped to WEST zone |
 | `west.accountant@hixaa.test` | `accounts-vidarbha-2026` | ACCOUNTS_EXECUTIVE, scoped to WEST zone |
 | `finance.manager@hixaa.test` | `finance-nagpur-2026` | FINANCE_MANAGER, GLOBAL |
+| `west.analyst@hixaa.test` | `analyst-vidarbha-2026` | REGIONAL_ANALYST, scoped to WEST zone |
+| `portal@nagpurautomation.test` | `portal-nagpur-2026` | DISTRIBUTOR_OWNER, scoped to `DIST-PORTAL-01` |
 
-The five non-admin accounts exist specifically to **test denial**, and are seeded by
+The seven non-admin accounts exist specifically to **test denial**, and are seeded by
 `prisma/seed/dev-users.seed.ts` (skipped in production) rather than living in one database.
+
+⚠️ **Use `west.analyst` for REPORT-scope tests.** It is the only account that is both
+TERRITORY-scoped and holds `analytics:read:financial` — every report in the catalogue is financial,
+so `west.manager` is refused on permission grounds and tells you nothing about scoping.
 
 ⚠️ **Use `west.storekeeper` for WRITE-scope tests, not `west.manager`.** `west.manager` holds
 read-only inventory permissions, so an out-of-scope write returns 403 on PERMISSION grounds and
@@ -320,6 +345,41 @@ not one. Anything touching the Nest container lives in `src/scripts/` and runs *
 `.catch(() => undefined)` left **sixteen** probe rows across runs while reporting success. Cleanup
 must report failure, not hide it.
 
+### 4.30 An exemption is only as narrow as the thing it recognises
+`CsrfGuard` exempted callers with no session cookie — correct for a server-to-server client — and
+recognised one by looking for the **refresh** cookie. That cookie is deliberately path-scoped to
+`/…/auth`, so the browser never sends it to `/distributors`, so **every mutation the admin UI makes
+skipped the CSRF check entirely.** Both halves were individually right. Measured, not reasoned:
+a forged header returned `201`. It now triggers on the `csrf_token` cookie (`Path=/`). ADR-0026.
+
+The general lesson: when a guard decides *whether to run*, test the negative case through the real
+client path. A check that only asserts the happy request passes identically against a guard that
+never executes.
+
+### 4.31 Two actions ending in the same status cannot both be guarded by the transition table
+`approve` and `reactivate` both reach `ACTIVE`. `PENDING_APPROVAL → ACTIVE` is legal — that is what
+approval does — so guarding `reactivate()` with `assertTransition` alone handed it that move, and a
+partner could be made ACTIVE **without verified KYC, without a GSTIN, without a contact**, with no
+`onboardedAt` and no `distributor.approved` event. `approve` returned 409 and `reactivate` returned
+ACTIVE on the same record, one second apart.
+
+This is §4.21 generalised: guard the ACTION on its own precondition; use the table only for status
+moves. `status-action-guards.spec.ts` finds every pair of actions sharing a destination and asserts
+the narrower one names its own required status.
+
+### 4.32 A form must validate what it will SEND, not what the DOM holds
+The DOM says "nothing" with `''`; Zod says it with `undefined`. Validating raw form values checks a
+payload the server will never see and refuses it for fields nobody was required to fill in — the
+distributor form produced **twelve errors at once** for untouched optional fields. `contractResolver`
+prunes with the same function the request uses, so the two cannot disagree. `NaN` counts as empty:
+`valueAsNumber` yields it for a cleared number input and it survives every other check.
+
+### 4.33 A `<select>` whose options load from an API must be CONTROLLED
+An uncontrolled `register`ed select mounts before the options arrive, falls back to `''`, and never
+picks its default up again. The billing-state field read empty on an edit form whose record plainly
+had one — and that field decides place of supply, so saving would have posted an address without it.
+Use `Controller` for any select fed by a query.
+
 ---
 
 ## 5. Architecture in one screen
@@ -332,7 +392,7 @@ packages/contracts   ⭐ Zod schemas — the single source of truth for every DT
                         OpenAPI, React Hook Form, and both apps' types.
 ```
 
-Twenty ADRs in `docs/adr/`. The ones that constrain daily work:
+Twenty-six ADRs in `docs/adr/`. The ones that constrain daily work:
 
 - **0002** Inventory will be a ledger + derived balance, never a mutable counter.
 - **0003** Authorization is scoped at the **repository** layer via a Prisma extension, so
@@ -378,6 +438,10 @@ Twenty ADRs in `docs/adr/`. The ones that constrain daily work:
 - **0023** Sheets goes through a port whose LOCAL adapter is real, not a mock — which is what let
   10.1 be executed and proven before credentials existed. Now also verified live.
 - **0024** A backup is proven by RESTORING it, not by an exit code. Rehearsed, with row counts.
+- **0025** Write forms are ROUTES, actions are DIALOGS, and one kit serves both. A form may not
+  contain a price. Every server field error either lands on a field or is shown in the summary.
+- **0026** CSRF enforcement triggers on the CSRF cookie, not the path-scoped refresh cookie —
+  which had made the whole control unreachable for every mutation the UI makes. See §4.30.
 
 ### Scoped entities so far
 `SCOPE_REGISTRY` in `infrastructure/database/scope-registry.ts`:
@@ -404,10 +468,10 @@ From `docs/05-roadmap.md` §Phase 11 — hardening and release: security review,
 100k distributors / 1M products / 5M order lines, WCAG 2.2 AA audit, production Compose + Nginx +
 TLS, `deploy.sh` / `rollback.sh`, the runbook, UAT, launch.
 
-**The one obligation Phase 10 leaves** (`docs/30` §9): **seed an account that is both
-TERRITORY-scoped and holds `analytics:read:financial`.** Every report in the catalogue is financial
-and the only territory-scoped account lacks that permission, so end-to-end *report* scoping is
-proven at the context level rather than through a full scheduled run. §4.14 makes exactly this point.
+**Phase 10's one obligation is DISCHARGED.** `REGIONAL_ANALYST` (TERRITORY-scoped, holds
+`analytics:read:financial`) and `west.analyst@hixaa.test` close the seed gap, and
+`verify-scheduled-reports.js` check 5 now proves report scoping through a **full scheduled run**:
+`analyst(west) sees 1 vs admin(global) sees 2`. Phase 11 starts with no inherited obligations.
 
 **Reuse, do not rebuild:** the six `verify-*.ts` harnesses in `apps/api/src/scripts/`,
 `scripts/backup.sh` and `restore.sh`, `JobHeartbeatService.track()` for any new scheduled job, and
@@ -432,9 +496,16 @@ Still unanswered from `docs/12-recommendations.md` §E:
 
 ## 8. Known gaps (deliberate, not forgotten)
 
-- **UI is read-only.** Every list and detail view works; **create/edit forms are not built**.
-  All mutations are API-complete and curl-verified. Forms are the largest single piece of
-  outstanding frontend work.
+- **UI is mostly read-only — DISTRIBUTORS are now writable.** Create, edit, and every state
+  transition work end to end through the browser (`docs/33`). A form kit exists in
+  `apps/web/src/components/form/` — `Field`, `Select`, `EntityPicker`, `MoneyInput`/`DateInput`,
+  `FormDialog`/`ConfirmDialog`, `SubmitBar` — plus `lib/form-errors.ts` and
+  `lib/use-entity-mutation.ts` (`contractResolver`, `pruneEmpty`). **Still to build: product ·
+  price list · customer · quotation · order · invoice issue · payment record/verify.** Seven "New …"
+  buttons remain dead. Read ADR-0025 before adding one; §4.32 and §4.33 are the two traps that cost
+  a debugging round each.
+- **The periphery of the distributor record is still API-only**: KYC upload, agreements, notes,
+  contacts. Deliberate — the spine comes first.
 - **MFA** — schema, config, and contracts exist. Login **fails closed** if a user has
   `mfaEnabled`. TOTP itself is not implemented.
 - **Teams** — schema only, no CRUD.
@@ -486,11 +557,15 @@ The user expects, and has consistently valued:
   database. A green build has twice coexisted with a completely broken security control here;
   Phase 8 found three more bugs this way after a clean typecheck (`docs/24` §3), and Phase 9 found
   that **the worker had not booted for three phases** (§2 above).
-  Two smoke suites live in `scripts/` — `phase-8-smoke.sh` (19 checks) and `phase-9-smoke.sh`
-  (24 checks). Phase 10 added six harnesses in `apps/api/src/scripts/`, run COMPILED (§4.28):
-  `verify-worker-jobs` · `verify-backup` · `verify-sheets-connection` · `verify-db-backup` ·
-  `verify-monitoring` · `verify-scheduled-reports`.
-  **Re-run them rather than trusting a completion record.**
+  Three smoke suites live in `scripts/` — `phase-8-smoke.sh` (19), `phase-9-smoke.sh` (24), and
+  `phase-11-forms-smoke.sh` (26, which drives the **BFF on :3000** rather than the API, because
+  that is the path a form takes and where the CSRF control turned out to be unreachable).
+  Seven harnesses in `apps/api/src/scripts/`, run COMPILED (§4.28): `verify-worker-jobs` ·
+  `verify-backup` · `verify-sheets-connection` · `verify-db-backup` · `verify-monitoring` ·
+  `verify-scheduled-reports` · `verify-search-perf`.
+  **Re-run them rather than trusting a completion record** — doing exactly that at the start of the
+  forms work turned up six defects, two of them security-relevant, and one check that had never
+  executed since the day it was written (`docs/33` §2).
 - **Measure before building the fast version.** ADR-0019 dropped the materialised views `docs/08`
   §10 had specified in Phase 0, after timing the aggregates at 10× projected volume. A performance
   plan written before there is data to test it against is a hypothesis, not a decision.

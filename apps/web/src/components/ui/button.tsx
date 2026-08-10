@@ -1,6 +1,6 @@
 'use client';
 
-import { Slot } from '@radix-ui/react-slot';
+import { Slot, Slottable } from '@radix-ui/react-slot';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { Loader2 } from 'lucide-react';
 import * as React from 'react';
@@ -59,7 +59,11 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             <span className="sr-only">Working…</span>
           </>
         ) : null}
-        {children}
+        {/* `Slottable` marks which child `asChild` should merge into. Without
+            it, Slot receives [spinner-or-null, children] and throws "Expected a
+            single React element child" — so `asChild` was broken for as long as
+            the loading state has existed, and nothing used it until now. */}
+        <Slottable>{children}</Slottable>
       </Comp>
     );
   },

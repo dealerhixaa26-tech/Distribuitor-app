@@ -184,6 +184,32 @@ export const ROLE_DEFINITIONS: readonly RoleDefinition[] = [
     permissions: [...ALL_READS, P.AUDITLOG_READ, P.AUDITLOG_EXPORT, P.ANALYTICS_READ_FINANCIAL],
   },
 
+  // ── Phase 11 — closes the seed gap from docs/30 §9. ──────────────────────
+  //    Every report in the catalogue is financial, and the only territory-scoped
+  //    account (west.manager) lacked analytics:read:financial, so end-to-end
+  //    report scoping was proven at the context level but not through a full
+  //    scheduled run. This role + west.analyst@hixaa.test fills the gap.
+  {
+    key: ROLE_KEYS.REGIONAL_ANALYST,
+    name: 'Regional Analyst',
+    description:
+      'Territory-scoped analytics. Can view and schedule financial reports ' +
+      'within their region, but cannot modify any business data.',
+    scopeType: 'TERRITORY',
+    level: 35,
+    permissions: [
+      P.ANALYTICS_READ, P.ANALYTICS_READ_FINANCIAL,
+      P.REPORT_READ, P.REPORT_CREATE, P.REPORT_RUN, P.REPORT_SCHEDULE, P.REPORT_EXPORT,
+      // Read-only access to the domains reports query against, so the scope
+      // extension has something to filter. Without these the report queries
+      // would 403 on the underlying data reads.
+      P.DISTRIBUTOR_READ, P.CUSTOMER_READ, P.ORDER_READ, P.QUOTATION_READ,
+      P.INVOICE_READ, P.PAYMENT_READ, P.PRODUCT_READ, P.CATEGORY_READ,
+      P.INVENTORY_READ, P.WAREHOUSE_READ,
+      P.TERRITORY_READ, P.DOCUMENT_READ, P.NOTIFICATION_READ,
+    ],
+  },
+
   // ── v2 Distributor Portal. Seeded now so the scope machinery is exercised
   //    and tested long before the portal UI exists. See ADR-0003.
   {

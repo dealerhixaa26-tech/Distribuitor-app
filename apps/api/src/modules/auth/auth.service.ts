@@ -89,10 +89,38 @@ export class AuthService {
       );
     }
 
+    /*
+     * A locked account answers EXACTLY as a wrong password does.
+     *
+     * ── Found in Phase 11.1, by execution ──────────────────────────────────
+     *
+     * This branch used to return ACCOUNT_LOCKED with an unlock time, and that
+     * made it an account-enumeration oracle. Six wrong passwords against a real
+     * address flipped the response to ACCOUNT_LOCKED; six against an address
+     * that does not exist stayed INVALID_CREDENTIALS forever. So six requests
+     * per candidate email enumerated every valid account — directly against
+     * `docs/06-security.md` §3, which promises identical responses for existent
+     * and non-existent accounts. The control held for the five attempts anyone
+     * had tested and failed on the sixth.
+     *
+     * `burnTime()` matters as much as the message: returning early here skipped
+     * the argon2 verify, so a locked account answered measurably faster than an
+     * unlocked one. The same §3 promises identical TIMING.
+     *
+     * The real owner is still told — `SECURITY_ACCOUNT_LOCKED` already emails
+     * them the `account-locked` template with the unlock time. That reaches the
+     * one person who should know, over a channel an attacker cannot read.
+     */
     if (user.lockedUntil && user.lockedUntil > this.clock.now()) {
+      await this.passwords.burnTime();
+      await this.audit.recordStandalone({
+        category: 'AUTH',
+        action: 'auth.login_failed',
+        metadata: { email: dto.email, reason: 'LOCKED', ip: context.ipAddress },
+      });
       throw new UnauthenticatedError(
-        `Account is temporarily locked. Try again after ${user.lockedUntil.toISOString()}.`,
-        ERROR_CODES.ACCOUNT_LOCKED,
+        'Incorrect email or password',
+        ERROR_CODES.INVALID_CREDENTIALS,
       );
     }
 

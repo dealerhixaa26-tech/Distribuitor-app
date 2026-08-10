@@ -50,6 +50,45 @@ const DISTRIBUTOR_SELECT = {
   _count: { select: { contacts: true } },
 } satisfies Prisma.DistributorSelect;
 
+/**
+ * The fields an edit form needs back, which the summary deliberately omits.
+ *
+ * Kept out of `DISTRIBUTOR_SELECT` because that projection also serves the
+ * list: joining two addresses onto every row would be two joins per record on
+ * a table 11.2 load-tested at 100k, to render columns the list never shows.
+ *
+ * `bankAccountEncrypted` is absent on purpose. An edit form does not need the
+ * account number to leave it unchanged — `update()` treats `undefined` as "not
+ * supplied" — so the plaintext never has to be decrypted, sent, or held in a
+ * browser. The form shows the masked value and says blank means keep.
+ */
+const ADDRESS_SELECT = {
+  label: true,
+  line1: true,
+  line2: true,
+  landmark: true,
+  cityId: true,
+  cityName: true,
+  stateId: true,
+  postalCode: true,
+  countryCode: true,
+  contactName: true,
+  contactPhone: true,
+} satisfies Prisma.AddressSelect;
+
+const DISTRIBUTOR_EDITABLE_SELECT = {
+  tan: true,
+  cin: true,
+  msmeNumber: true,
+  paymentTermsCode: true,
+  website: true,
+  bankAccountName: true,
+  bankIfsc: true,
+  bankName: true,
+  billingAddress: { select: ADDRESS_SELECT },
+  shippingAddress: { select: ADDRESS_SELECT },
+} satisfies Prisma.DistributorSelect;
+
 @Injectable()
 export class DistributorsService {
   constructor(
@@ -115,7 +154,11 @@ export class DistributorsService {
   async findDetail(id: string) {
     const summary = await this.findById(id);
 
-    const [contacts, documents, notes, agreements] = await Promise.all([
+    const [editable, contacts, documents, notes, agreements] = await Promise.all([
+      this.prisma.db.distributor.findFirst({
+        where: { id },
+        select: DISTRIBUTOR_EDITABLE_SELECT,
+      }),
       this.prisma.db.distributorContact.findMany({
         where: { distributorId: id },
         orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }],
@@ -171,6 +214,22 @@ export class DistributorsService {
 
     return {
       ...summary,
+      // Everything the update DTO accepts, so an edit form can be pre-filled
+      // with what is actually stored rather than showing blanks that read as
+      // "nothing on file". Nested so it is obvious which half of this response
+      // is for display and which is for editing.
+      editable: {
+        tan: editable?.tan ?? null,
+        cin: editable?.cin ?? null,
+        msmeNumber: editable?.msmeNumber ?? null,
+        paymentTermsCode: editable?.paymentTermsCode ?? null,
+        website: editable?.website ?? null,
+        bankAccountName: editable?.bankAccountName ?? null,
+        bankIfsc: editable?.bankIfsc ?? null,
+        bankName: editable?.bankName ?? null,
+        billingAddress: editable?.billingAddress ?? null,
+        shippingAddress: editable?.shippingAddress ?? null,
+      },
       contacts,
       documents: documents.map((doc) => ({
         ...doc,
@@ -463,6 +522,31 @@ export class DistributorsService {
 
   async reactivate(id: string, actorId: string) {
     const current = await this.currentStatus(id);
+
+    /**
+     * Guarded on the ACTION's own precondition, not on the transition table —
+     * HANDOFF §4.21, met here a second time.
+     *
+     * `PENDING_APPROVAL → ACTIVE` is a legal move, because that is what
+     * approval does. Guarding `reactivate()` with the table therefore handed it
+     * that move too: a distributor awaiting approval could be made ACTIVE
+     * through this endpoint, skipping the verified-KYC check, the GSTIN check
+     * and the contact check that `approve()` performs, never recording
+     * `onboardedAt`, and never emitting `distributor.approved`. The result was
+     * a partner able to transact and be invoiced with no verified KYC at all.
+     *
+     * Reactivation means one thing: undoing a suspension. Anything else
+     * reaching ACTIVE is an approval and must go through `approve()`.
+     */
+    if (current !== 'SUSPENDED') {
+      throw new ConflictError(
+        `Only a SUSPENDED distributor can be reactivated; this one is ${current}. ` +
+          (current === 'PENDING_APPROVAL'
+            ? 'Use approve, which checks KYC, the GSTIN, and that a contact exists.'
+            : ''),
+      );
+    }
+
     this.assertTransition(current, 'ACTIVE');
     return this.transition(id, 'ACTIVE', actorId, { action: 'distributor.reactivated' });
   }

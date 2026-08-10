@@ -19,6 +19,7 @@ import { TableSkeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ApiError, api } from '@/lib/api-client';
 import { formatDate, formatMoney, formatRelative, humanizeEnum } from '@/lib/utils';
+import { DistributorActions } from './distributor-actions';
 
 /**
  * Distributor 360.
@@ -135,7 +136,16 @@ export default function DistributorDetailPage() {
             .filter(Boolean)
             .join(' · ') || undefined
         }
-        actions={<StatusBadge status={data.status} />}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={data.status} />
+            <DistributorActions
+              distributorId={data.id}
+              status={data.status}
+              creditLimit={data.creditLimit}
+            />
+          </div>
+        }
       />
 
       {data.kycMissing.length > 0 && data.status !== 'TERMINATED' ? (

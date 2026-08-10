@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { config as loadEnv } from 'dotenv';
 import { seedCatalog } from './catalog.seed';
+import { seedDevDistributorPortal } from './dev-distributor-portal.seed';
 import { seedDevUsers } from './dev-users.seed';
 import { seedInventory } from './inventory.seed';
 import { seedGeography, seedIndustries, seedTerritories } from './geography.seed';
@@ -56,6 +57,7 @@ async function main(): Promise<void> {
 
   console.log('\n› Denial-test accounts (dev only)');
   await seedDevUsers(prisma);
+  await seedDevDistributorPortal(prisma);
 
   console.log('\n› Bootstrap administrator');
   await seedSuperAdmin();

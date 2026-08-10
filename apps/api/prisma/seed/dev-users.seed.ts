@@ -91,6 +91,19 @@ const DEV_USERS: DevUserSeed[] = [
       'The segregation in ADR-0018 needs TWO accounts to demonstrate at all: one to record a ' +
       'receipt and a different one to confirm it.',
   },
+  {
+    email: 'west.analyst@hixaa.test',
+    password: 'analyst-vidarbha-2026',
+    firstName: 'West',
+    lastName: 'Analyst',
+    roleKey: 'REGIONAL_ANALYST',
+    territoryName: 'West Zone',
+    purpose:
+      'Phase 11 — closes the seed gap from docs/30 §9. The only account that is both ' +
+      'TERRITORY-scoped and holds analytics:read:financial. Every report in the catalogue ' +
+      'is financial, and this is the shape needed to prove end-to-end report scoping through ' +
+      'a full scheduled run, not just at the context level.',
+  },
 ];
 
 export async function seedDevUsers(prisma: PrismaClient): Promise<void> {

@@ -248,7 +248,23 @@ async function tableNames(prisma: PrismaService): Promise<string[]> {
  */
 function buildCountQuery(tables: string[]): string {
   if (tables.length === 0) return `SELECT ''::text AS table_name, 0::bigint AS n WHERE false`;
+
   return tables
-    .map((t) => `SELECT '${t}'::text AS table_name, count(*)::bigint AS n FROM "${t}"`)
+    .map((t) => {
+      /*
+       * These names come from `pg_tables`, not from a caller, so this is not
+       * injectable today. It is escaped anyway, for two reasons: a Postgres
+       * identifier created with quoted syntax may legally contain a `"`, which
+       * would break out of the quoting below; and the day someone passes this
+       * function a caller-supplied list, the defence should already be here
+       * rather than depend on nobody having done so.
+       *
+       * Doubling is the correct escape in both positions — `""` inside a
+       * quoted identifier, `''` inside a string literal.
+       */
+      const ident = t.replace(/"/g, '""');
+      const literal = t.replace(/'/g, "''");
+      return `SELECT '${literal}'::text AS table_name, count(*)::bigint AS n FROM "${ident}"`;
+    })
     .join(' UNION ALL ');
 }
