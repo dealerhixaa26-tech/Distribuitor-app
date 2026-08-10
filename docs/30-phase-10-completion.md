@@ -252,10 +252,10 @@ presents as an application bug.
 
 ## 9. What Phase 11 should know
 
-- **A seed gap.** No account is both TERRITORY-scoped **and** holds `analytics:read:financial` —
-  every catalogue report is financial, and the one territory-scoped account (`west.manager`) lacks
-  it. So end-to-end *report* scoping is proven at the context level, not through a full scheduled
-  run. Seed an account of that shape; HANDOFF §4.14 makes exactly this point.
+- ~~**A seed gap.**~~ ✅ **CLOSED in Phase 11.** A `REGIONAL_ANALYST` role (TERRITORY-scoped, holds
+  `analytics:read:financial`) and `west.analyst@hixaa.test` now exist. End-to-end report scoping is
+  proven through a **full scheduled run**, not just at the context level:
+  `analyst(west) sees 1 vs admin(global) sees 2` — `verify-scheduled-reports.js` check 5.
 - **Two `cron` versions briefly appeared.** `pnpm add cron` resolved `^4.4.0` when the tree already
   had 3.5.0 via `@nestjs/schedule`. Pinned to 3.5.0. Check the resolved version when adding a
   package that is already a transitive dependency.

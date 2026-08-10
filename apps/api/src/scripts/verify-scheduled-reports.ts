@@ -226,6 +226,77 @@ async function main(): Promise<void> {
           'The permission check applies under asUser(), not only on the HTTP path.'
         : `UNEXPECTEDLY RAN: status=${scopedRun.status}, rows=${scopedRun.rowCount}`,
     );
+
+    console.log('\n── 5. ⚠️  FULL SCHEDULED RUN — scoped AND permitted ────────');
+    /*
+     * Phase 11 — closes the seed gap from docs/30 §9.
+     *
+     * west.analyst@hixaa.test is REGIONAL_ANALYST: territory-scoped to West
+     * Zone AND holds analytics:read:financial. This is the shape no account
+     * had before, which meant report scoping could only be proven at the
+     * context level (check 3 above), never through a full scheduled run.
+     *
+     * The test: a financial report owned by west.analyst runs (not refused)
+     * and produces FEWER rows than the same report owned by a global admin.
+     * If the runner ignores the owner's scope, both will return the same
+     * count — which is the data leak ADR-0021 exists to prevent.
+     */
+    const analyst = await RequestContextStore.withoutScope(() =>
+      prisma.db.user.findUnique({
+        where: { email: 'west.analyst@hixaa.test' },
+        select: { id: true },
+      }),
+    );
+
+    if (!analyst) {
+      check(
+        'west.analyst@hixaa.test exists (run pnpm db:seed first)',
+        false,
+        'The account that closes the seed gap is missing. Seed it.',
+      );
+    } else {
+      const analystDef = await RequestContextStore.withoutScope(() =>
+        prisma.db.reportDefinition.create({
+          data: {
+            type: 'DISTRIBUTOR_PERFORMANCE',
+            name: 'Probe — owned by WEST-scoped analyst (has financial permission)',
+            parameters: params,
+            format: 'CSV',
+            cronExpression: '0 9 * * *',
+            recipients: ['probe@hixaa.test'],
+            isScheduleActive: true,
+            nextRunAt: new Date(clock.nowMs() - 60_000),
+            createdById: analyst.id,
+          },
+          select: { id: true },
+        }),
+      );
+      created.push(analystDef.id);
+
+      await sweep();
+
+      const analystRun = await prisma.db.reportRun.findFirst({
+        where: { definitionId: analystDef.id },
+        orderBy: { createdAt: 'desc' },
+        select: { rowCount: true, status: true },
+      });
+
+      check(
+        'a financial report owned by a PERMITTED + SCOPED user RUNS (not refused)',
+        analystRun?.status === 'SUCCESS' && (analystRun.rowCount ?? 0) > 0,
+        `status=${analystRun?.status}, rows=${analystRun?.rowCount}`,
+      );
+
+      check(
+        'and it sees FEWER rows than the global admin — the scope is real',
+        analystRun != null &&
+          globalRun != null &&
+          (analystRun.rowCount ?? 0) < (globalRun.rowCount ?? 0),
+        `analyst(west) sees ${analystRun?.rowCount} vs admin(global) sees ${globalRun?.rowCount}. ` +
+          `Equal counts would mean asUser() is not scoping the report's query — ` +
+          `the data leak ADR-0021 exists to prevent.`,
+      );
+    }
   } catch (error) {
     console.error('\n  ✗ threw:', error instanceof Error ? error.message : error);
     failures++;

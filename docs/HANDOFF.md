@@ -101,9 +101,14 @@ dev server first. This cost a confusing detour in Phase 10.
 | `west.storekeeper@hixaa.test` | `storekeeper-nagpur-2026` | INVENTORY_MANAGER, scoped to WEST zone |
 | `west.accountant@hixaa.test` | `accounts-vidarbha-2026` | ACCOUNTS_EXECUTIVE, scoped to WEST zone |
 | `finance.manager@hixaa.test` | `finance-nagpur-2026` | FINANCE_MANAGER, GLOBAL |
+| `west.analyst@hixaa.test` | `analyst-vidarbha-2026` | REGIONAL_ANALYST, scoped to WEST zone |
 
-The five non-admin accounts exist specifically to **test denial**, and are seeded by
+The six non-admin accounts exist specifically to **test denial**, and are seeded by
 `prisma/seed/dev-users.seed.ts` (skipped in production) rather than living in one database.
+
+⚠️ **Use `west.analyst` for REPORT-scope tests.** It is the only account that is both
+TERRITORY-scoped and holds `analytics:read:financial` — every report in the catalogue is financial,
+so `west.manager` is refused on permission grounds and tells you nothing about scoping.
 
 ⚠️ **Use `west.storekeeper` for WRITE-scope tests, not `west.manager`.** `west.manager` holds
 read-only inventory permissions, so an out-of-scope write returns 403 on PERMISSION grounds and
@@ -404,10 +409,10 @@ From `docs/05-roadmap.md` §Phase 11 — hardening and release: security review,
 100k distributors / 1M products / 5M order lines, WCAG 2.2 AA audit, production Compose + Nginx +
 TLS, `deploy.sh` / `rollback.sh`, the runbook, UAT, launch.
 
-**The one obligation Phase 10 leaves** (`docs/30` §9): **seed an account that is both
-TERRITORY-scoped and holds `analytics:read:financial`.** Every report in the catalogue is financial
-and the only territory-scoped account lacks that permission, so end-to-end *report* scoping is
-proven at the context level rather than through a full scheduled run. §4.14 makes exactly this point.
+**Phase 10's one obligation is DISCHARGED.** `REGIONAL_ANALYST` (TERRITORY-scoped, holds
+`analytics:read:financial`) and `west.analyst@hixaa.test` close the seed gap, and
+`verify-scheduled-reports.js` check 5 now proves report scoping through a **full scheduled run**:
+`analyst(west) sees 1 vs admin(global) sees 2`. Phase 11 starts with no inherited obligations.
 
 **Reuse, do not rebuild:** the six `verify-*.ts` harnesses in `apps/api/src/scripts/`,
 `scripts/backup.sh` and `restore.sh`, `JobHeartbeatService.track()` for any new scheduled job, and
