@@ -9,6 +9,27 @@ import type { ProblemDetails } from '@hixaa/contracts';
  * via XSS as a viable attack. See docs/01-architecture.md §6.
  */
 
+/**
+ * Canonicalises a server field path to the dotted form.
+ *
+ *   lines[0].productId   →  lines.0.productId
+ *   billingAddress.line1 →  billingAddress.line1   (already canonical)
+ *
+ * The API joins Zod issue paths with brackets for array indices. React Hook
+ * Form does NOT care — its `stringToPath` splits on `/[.[\]'"]/`, so both forms
+ * resolve to the same field, verified against the installed version in
+ * `form-errors.spec.ts`. `setError` works either way.
+ *
+ * The normalisation exists for the code that compares these paths as STRINGS:
+ * `applyServerErrors` decides whether the form actually renders the field an
+ * error names, and `'lines[0].productId' === 'lines.0.productId'` is false.
+ * Without one canonical form, that comparison would misclassify every
+ * array-line error as unattributable.
+ */
+export function toFieldPath(serverPath: string): string {
+  return serverPath.replace(/\[(\d+)\]/g, '.$1');
+}
+
 /** A failed request, carrying the server's Problem Details intact. */
 export class ApiError extends Error {
   constructor(
@@ -29,10 +50,12 @@ export class ApiError extends Error {
     return this.problem.requestId;
   }
 
-  /** Field errors keyed by path, ready to hand to React Hook Form. */
+  /** Field errors keyed by canonical dotted path — see `toFieldPath`. */
   get fieldErrors(): Record<string, string> {
     const output: Record<string, string> = {};
-    for (const error of this.problem.errors ?? []) output[error.field] = error.message;
+    for (const error of this.problem.errors ?? []) {
+      output[toFieldPath(error.field)] = error.message;
+    }
     return output;
   }
 

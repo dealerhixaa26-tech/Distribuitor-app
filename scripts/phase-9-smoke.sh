@@ -1,7 +1,11 @@
 #!/bin/bash
 # Phase 9 smoke — analytics, reports, search, notifications, and the two
 # obligations Phase 8 placed on this phase. Run against a booted API.
-API=http://localhost:4000/api/v1
+# Exported, not merely assigned: the reconciliation check below reads these
+# from os.environ in a python heredoc. Without `export` it died with a KeyError
+# every run since this file was written — the check never once compared the two
+# totals it exists to compare.
+export API=http://localhost:4000/api/v1
 pass=0; fail=0
 check() { # check <label> <expected> <actual>
   if [ "$2" = "$3" ]; then echo "  PASS  $1"; pass=$((pass+1));
@@ -11,7 +15,7 @@ code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 login() { curl -s -X POST "$API/auth/login" -H 'Content-Type: application/json' -d "$1" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin).get("data",{}).get("accessToken",""))'; }
 
-T=$(login '{"email":"admin@hixaa.com","password":"ChangeMe!Now#2026"}')
+export T=$(login '{"email":"admin@hixaa.com","password":"ChangeMe!Now#2026"}')
 SK=$(login '{"email":"west.storekeeper@hixaa.test","password":"storekeeper-nagpur-2026"}')
 
 echo "── Analytics panels ──"

@@ -52,8 +52,17 @@ export class CsrfGuard implements CanActivate {
 
     // A pure bearer-token call — a server-to-server client or a mobile app —
     // carries no cookies, so it cannot be cross-site forged.
-    const hasSessionCookie = Boolean(request.cookies?.[this.config.auth.cookieName]);
-    if (!hasSessionCookie) return true;
+    //
+    // A browser is recognised by the cookies it sends, NOT by one particular
+    // cookie. Reading only the refresh cookie exempted every mutation the admin
+    // UI makes: that cookie is deliberately scoped to `/…/auth`, so the browser
+    // never sends it to /distributors, the BFF never forwards it, and this
+    // guard returned before comparing anything. Measured, not assumed —
+    // a forged header was accepted with a 201. See ADR-0026.
+    const isBrowserSession =
+      Boolean(request.cookies?.[this.config.auth.cookieName]) ||
+      Boolean(request.cookies?.[CSRF_COOKIE]);
+    if (!isBrowserSession) return true;
 
     const cookieToken = request.cookies?.[CSRF_COOKIE] as string | undefined;
     const headerToken = request.headers[CSRF_HEADER] as string | undefined;

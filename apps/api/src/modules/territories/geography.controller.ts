@@ -1,6 +1,8 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { type ListCitiesQuery, listCitiesQuerySchema } from '@hixaa/contracts';
 import { CacheKeys, RedisService } from '../../infrastructure/cache/redis.service';
+import { zodQuery } from '../../common/pipes/zod-validation.pipe';
 import { AppConfigService } from '../../config/app-config.service';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 
@@ -47,7 +49,8 @@ export class GeographyController {
 
   @Get('cities')
   @ApiOperation({ summary: 'Cities, optionally filtered by state' })
-  async cities(@Query('stateId') stateId?: string) {
+  async cities(@Query(zodQuery(listCitiesQuerySchema)) query: ListCitiesQuery) {
+    const { stateId } = query;
     return this.prisma.db.city.findMany({
       where: { isActive: true, ...(stateId ? { stateId } : {}) },
       orderBy: { name: 'asc' },

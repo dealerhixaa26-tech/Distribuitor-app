@@ -5,6 +5,7 @@ import { PERMISSIONS } from '@hixaa/contracts';
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Building2, Plus, ShieldAlert } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { DataTable } from '@/components/data-table/data-table';
@@ -130,9 +131,11 @@ export default function DistributorsPage() {
         description="Hixaa's channel partners. A territory-scoped user only ever sees their own — enforced in the database."
         actions={
           can(PERMISSIONS.DISTRIBUTOR_CREATE) ? (
-            <Button>
-              <Plus aria-hidden="true" />
-              New distributor
+            <Button asChild>
+              <Link href="/distributors/new">
+                <Plus aria-hidden="true" />
+                New distributor
+              </Link>
             </Button>
           ) : null
         }

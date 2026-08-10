@@ -96,6 +96,21 @@ export const citySchema = z.object({
   pincode: z.string().nullable(),
 });
 
+/**
+ * The city lookup's only parameter.
+ *
+ * It existed as a raw `@Query('stateId')` string handed straight to Prisma, so
+ * a malformed id reached the driver and came back as a 500 — the one query
+ * parameter in the API with no schema behind it, on the endpoint an address
+ * form calls every time someone picks a state. A bad id is the caller's
+ * mistake and belongs in a 422; a 500 means something here is broken, and
+ * that distinction is what the ops alerting reads.
+ */
+export const listCitiesQuerySchema = z.object({
+  stateId: idSchema.optional(),
+});
+export type ListCitiesQuery = z.infer<typeof listCitiesQuerySchema>;
+
 export const industrySchema = z.object({
   id: idSchema,
   slug: z.string(),
