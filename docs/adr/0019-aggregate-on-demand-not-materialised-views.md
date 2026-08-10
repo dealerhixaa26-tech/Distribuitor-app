@@ -120,3 +120,44 @@ machinery that does not exist — which is why both now point here.
 **Honest note.** This reverses a recommendation made in Phase 0 by the same process that wrote it.
 The earlier document was not wrong to specify a plan; it was wrong to be treated as settled once
 data existed to test it against.
+
+---
+
+## Update — 2026-08-10: re-measured at Phase 11.2's load-test volume
+
+This ADR named its own revisit conditions. Phase 11.2 tested them at roadmap volume — 100k
+distributors, 1M products, **5M order lines** — and the answer is that **the decision stands**.
+
+| Panel | Volume B + index (this ADR) | 11.2 load test | vs 200 ms trigger |
+|---|---|---|---|
+| Revenue KPI | 0.5 ms | 7.1 ms | ✅ |
+| Sales trend, 12 months | 39.6 ms | 30.1 ms | ✅ |
+| **Top 10 products** | 39.1 ms | **2,327.5 ms** | ❌ **fired** |
+| Top 10 distributors | 14.2 ms | 148.3 ms | ✅ |
+| Revenue by territory | 2.7 ms | 36.9 ms | ✅ |
+
+**The trigger fired on exactly the panel this ADR predicted it would**, for the reason it gave:
+
+> *"They genuinely have to aggregate 120,000 line rows, and no index removes that work."*
+
+At 5,000,000 line rows it is 2.3 s. The prediction was right; only the volume changed.
+
+**Why the decision still stands.** 5M order lines is **417× Volume A**, which was already described
+here as a generous three-year projection for a business where "1,000 orders a year is optimistic".
+Every other panel remains inside target at that volume. Judging this decision against a number the
+business will not reach would be the same mistake as the Phase 0 document this ADR reversed —
+planning for hypothetical data instead of measuring real data.
+
+**The escalation path, if volume ever approaches it**, in order:
+
+1. Restrict the panel's window — it aggregates 12 months; most users look at one.
+2. A narrow rollup table maintained by the existing outbox consumer. Not a materialised view: every
+   objection in §2 above (staleness contradicting the drill-through list, refresh operations,
+   fighting Prisma) applies to a view and none applies to an incrementally-maintained table.
+3. Only then reconsider materialised views.
+
+**One thing this ADR's rule caught elsewhere.** "An index nobody measured is a write cost nobody
+accounted for" turned out to apply to Phase 4's trigram indexes: 69 MB of GIN index on `product`
+that the search query's *function* form could not use, so it was maintained on every write and read
+by nothing. Fixed in 11.2 by switching the predicate to the `<%` operator — 1,212 ms → 5.7 ms.
+See `docs/32` §3.

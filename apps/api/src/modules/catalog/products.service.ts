@@ -611,19 +611,47 @@ export class ProductsService {
     // silently never fires. word_similarity scores the query against the
     // closest word instead, giving 0.57 for the same pair.
     //
-    // This is a sequential scan rather than an index probe, which is a
-    // deliberate trade: it runs ONLY when exact full-text search returned
-    // nothing, i.e. on a genuine typo, so the common path stays on the GIN
-    // index and the rare path pays for itself.
-    const fuzzy = await this.prisma.db.$queryRaw<Array<{ id: string }>>`
-      SELECT id
-      FROM product
-      WHERE deleted_at IS NULL
-        AND GREATEST(word_similarity(${term}, name), word_similarity(${term}, sku)) > 0.4
-      ORDER BY GREATEST(word_similarity(${term}, name), word_similarity(${term}, sku)) DESC,
-               created_at DESC
-      LIMIT ${SEARCH_RESULT_CAP}
-    `;
+    /*
+     * ── Phase 11.2: the same scores, via the index ─────────────────────────
+     *
+     * This was a deliberate sequential scan, on the reasoning that the fuzzy
+     * branch runs only when exact search found nothing, so a rare path could
+     * afford to be slow. That reasoning was sound at Phase 4's volume and does
+     * not survive the load test:
+     *
+     *   1M products, selective term, 6 matching rows
+     *     word_similarity(...) > 0.4   Seq Scan            1712 ms
+     *     ${term} <% name              Bitmap Index Scan      0.72 ms
+     *
+     * A typo costing the user 1.7 s breaches the p95 < 300 ms target in
+     * `docs/00`, and "rare" is not "never" — it is every misspelling anyone
+     * types.
+     *
+     * The sharper point: `product_name_trgm_idx` and `product_sku_trgm_idx`
+     * already exist and total 69 MB. The FUNCTION form cannot use them, so
+     * they were maintained on every product write and read by nothing — the
+     * exact cost ADR-0019 warns about ("an index nobody measured is a write
+     * cost nobody accounted for"). Either the query uses them or they should
+     * be dropped; using them is 2,378× cheaper than not.
+     *
+     * `<%` is the indexable operator behind `word_similarity` and honours
+     * `word_similarity_threshold`, which is why it is SET LOCAL below rather
+     * than left at its 0.6 default — 0.4 is the threshold this search has
+     * always used. The ORDER BY keeps the function form: ranking reads the
+     * already-matched rows, so it costs nothing to index.
+     */
+    const fuzzy = await this.prisma.transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL pg_trgm.word_similarity_threshold = 0.4`);
+      return tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id
+        FROM product
+        WHERE deleted_at IS NULL
+          AND (${term} <% name OR ${term} <% sku)
+        ORDER BY GREATEST(word_similarity(${term}, name), word_similarity(${term}, sku)) DESC,
+                 created_at DESC
+        LIMIT ${SEARCH_RESULT_CAP}
+      `;
+    });
     return fuzzy.map((row) => row.id);
   }
 
