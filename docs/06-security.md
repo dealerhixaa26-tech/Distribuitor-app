@@ -31,7 +31,7 @@
 |---|---|
 | **A01 Broken Access Control** | Four-layer enforcement (§4 of `04-rbac`), repository-level scoping via Prisma extension, no IDOR-able endpoints, `404` on out-of-scope, deny-by-default guards on every route |
 | **A02 Cryptographic Failures** | Argon2id (m=64MB, t=3, p=4) for passwords; SHA-256 for refresh tokens; AES-256-GCM for bank details and MFA secrets at rest; TLS 1.2+ with HSTS preload; secrets never logged |
-| **A03 Injection** | Prisma parameterised queries throughout; **zero raw SQL with interpolation** — the two raw queries we need (materialised-view refresh, ledger reconciliation) take no user input; Zod validation on all inputs; output encoding by React |
+| **A03 Injection** | Prisma parameterised queries throughout; Zod validation on all inputs; output encoding by React. **No user input reaches raw SQL.** Audited in Phase 11.1 — the four raw call sites are: the outbox claim and reconciliation (tagged templates, parameterised); `SET statement_timeout` (wrapped in `Number()`, so a bad env value becomes `NaN` not SQL); `buildCountQuery` (identifiers from `pg_tables`, escaped anyway); and the backup harness (`$1::uuid[]` bind parameters) |
 | **A04 Insecure Design** | This document set; threat model above; segregation of duties; ledgers over mutable counters; immutable financial documents; idempotency on money-moving endpoints |
 | **A05 Security Misconfiguration** | Helmet with explicit CSP; Swagger disabled in production; stack traces never returned; config Zod-validated at boot so a misconfigured deploy fails immediately and loudly; containers run as non-root |
 | **A06 Vulnerable Components** | `pnpm audit` gate in CI, Dependabot, pinned digests for base images, minimal Alpine images |
@@ -50,7 +50,15 @@ Password policy   min 12 chars, zxcvbn score ≥ 3, checked against a common-pas
 Hashing           argon2id, memoryCost 65536, timeCost 3, parallelism 4, unique salt.
 Lockout           5 failures → 15 min lock; escalating to 1 h. Counter resets on success.
 Enumeration       /login and /forgot-password return identical responses and timing for
-                  existent and non-existent accounts.
+                  existent and non-existent accounts — INCLUDING once an account is
+                  locked. A locked account answers exactly as a wrong password does.
+                  Phase 11.1 found this broken past the lockout threshold: six wrong
+                  passwords flipped a real account to ACCOUNT_LOCKED while an absent
+                  one stayed INVALID_CREDENTIALS, enumerating the user table six
+                  requests at a time. The real owner is told by EMAIL instead
+                  (SECURITY_ACCOUNT_LOCKED → the account-locked template), and the
+                  audit log records reason: LOCKED for operators.
+                  Pinned by login-enumeration.spec.ts.
 Reset tokens      256-bit random, SHA-256 stored, single-use, 30 min TTL,
                   and using one revokes every active session.
 MFA               TOTP (RFC 6238), encrypted secret, hashed single-use backup codes.
