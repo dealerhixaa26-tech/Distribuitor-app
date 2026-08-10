@@ -102,8 +102,9 @@ dev server first. This cost a confusing detour in Phase 10.
 | `west.accountant@hixaa.test` | `accounts-vidarbha-2026` | ACCOUNTS_EXECUTIVE, scoped to WEST zone |
 | `finance.manager@hixaa.test` | `finance-nagpur-2026` | FINANCE_MANAGER, GLOBAL |
 | `west.analyst@hixaa.test` | `analyst-vidarbha-2026` | REGIONAL_ANALYST, scoped to WEST zone |
+| `portal@nagpurautomation.test` | `portal-nagpur-2026` | DISTRIBUTOR_OWNER, scoped to `DIST-PORTAL-01` |
 
-The six non-admin accounts exist specifically to **test denial**, and are seeded by
+The seven non-admin accounts exist specifically to **test denial**, and are seeded by
 `prisma/seed/dev-users.seed.ts` (skipped in production) rather than living in one database.
 
 ⚠️ **Use `west.analyst` for REPORT-scope tests.** It is the only account that is both
