@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Package, Plus, ScanBarcode } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useState } from 'react';
 import { DataTable } from '@/components/data-table/data-table';
 import { PageHeader } from '@/components/layout/page-header';
@@ -145,9 +146,11 @@ export default function ProductsPage() {
         description="Hixaa's catalog — goods, services, kits, and configurable systems. Prices exclude GST."
         actions={
           can(PERMISSIONS.PRODUCT_CREATE) ? (
-            <Button>
-              <Plus aria-hidden="true" />
-              New product
+            <Button asChild>
+              <Link href="/products/new">
+                <Plus aria-hidden="true" />
+                New product
+              </Link>
             </Button>
           ) : null
         }

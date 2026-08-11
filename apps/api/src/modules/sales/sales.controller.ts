@@ -53,6 +53,7 @@ import type { Response } from 'express';
 import { zodBody, zodParam, zodQuery } from '../../common/pipes/zod-validation.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
+import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { CustomersService } from './customers.service';
 import { OrdersService } from './orders.service';
 import { QuotationPdfService } from './quotation-pdf.service';
@@ -293,6 +294,7 @@ export class OrdersController {
 
   @Post()
   @RequirePermission(PERMISSIONS.ORDER_CREATE)
+  @Idempotent()
   @ApiOperation({
     summary: 'Create an order',
     description:
@@ -308,6 +310,7 @@ export class OrdersController {
 
   @Post('from-quotation/:quotationId')
   @RequirePermission(PERMISSIONS.QUOTATION_CONVERT)
+  @Idempotent()
   @ApiOperation({
     summary: 'Convert an ACCEPTED quotation into a DRAFT order',
     description: 'Re-prices as it converts rather than carrying a possibly stale number forward.',
@@ -346,6 +349,7 @@ export class OrdersController {
 
   @Post(':id/approve')
   @RequirePermission(PERMISSIONS.ORDER_APPROVE)
+  @Idempotent()
   @ApiOperation({
     summary: 'Approve — credit, ceilings, and stock reservation',
     description:

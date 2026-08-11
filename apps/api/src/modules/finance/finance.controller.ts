@@ -60,6 +60,7 @@ import type { Response } from 'express';
 import { zodBody, zodParam, zodQuery } from '../../common/pipes/zod-validation.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
+import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { GstReturnsService } from './gst-returns.service';
 import { InvoicePdfService } from './invoice-pdf.service';
 import { InvoicesService } from './invoices.service';
@@ -118,6 +119,7 @@ export class InvoicesController {
 
   @Post()
   @RequirePermission(PERMISSIONS.INVOICE_CREATE)
+  @Idempotent()
   @ApiOperation({
     summary: 'Draft a direct invoice, with no originating order',
     description:
@@ -133,6 +135,7 @@ export class InvoicesController {
 
   @Post('from-order/:orderId')
   @RequirePermission(PERMISSIONS.INVOICE_CREATE)
+  @Idempotent()
   @ApiOperation({
     summary: 'Draft an invoice from an order',
     description:
@@ -149,6 +152,7 @@ export class InvoicesController {
 
   @Post('from-shipment/:shipmentId')
   @RequirePermission(PERMISSIONS.INVOICE_CREATE)
+  @Idempotent()
   @ApiOperation({ summary: 'Draft an invoice for exactly what one shipment carried' })
   async fromShipment(
     @Param('shipmentId', zodParam(uuidSchema)) shipmentId: string,
@@ -177,6 +181,7 @@ export class InvoicesController {
    */
   @Post(':id/issue')
   @RequirePermission(PERMISSIONS.INVOICE_ISSUE)
+  @Idempotent()
   @ApiOperation({
     summary: 'Issue — allocates the statutory number and posts to the ledger',
     description:
@@ -248,6 +253,7 @@ export class CreditNotesController {
 
   @Post()
   @RequirePermission(PERMISSIONS.INVOICE_CREDIT_NOTE)
+  @Idempotent()
   @ApiOperation({
     summary: 'Draft a credit note against an issued invoice',
     description:
@@ -264,6 +270,7 @@ export class CreditNotesController {
 
   @Post(':id/issue')
   @RequirePermission(PERMISSIONS.INVOICE_CREDIT_NOTE)
+  @Idempotent()
   async issue(
     @Param('id', zodParam(uuidSchema)) id: string,
     @Body(zodBody(issueTaxNoteSchema)) dto: { noteDate?: string },
@@ -302,6 +309,7 @@ export class DebitNotesController {
 
   @Post()
   @RequirePermission(PERMISSIONS.INVOICE_CREDIT_NOTE)
+  @Idempotent()
   @ApiOperation({ summary: 'Draft a debit note — an under-charge on an issued invoice' })
   async create(
     @Body(zodBody(createTaxNoteSchema)) dto: CreateTaxNoteDto,
@@ -312,6 +320,7 @@ export class DebitNotesController {
 
   @Post(':id/issue')
   @RequirePermission(PERMISSIONS.INVOICE_CREDIT_NOTE)
+  @Idempotent()
   async issue(
     @Param('id', zodParam(uuidSchema)) id: string,
     @Body(zodBody(issueTaxNoteSchema)) dto: { noteDate?: string },
@@ -352,6 +361,7 @@ export class PaymentsController {
 
   @Post()
   @RequirePermission(PERMISSIONS.PAYMENT_CREATE)
+  @Idempotent()
   @ApiOperation({
     summary: 'Record a receipt — a memo, with NO financial effect',
     description:
@@ -378,6 +388,7 @@ export class PaymentsController {
 
   @Post(':id/verify')
   @RequirePermission(PERMISSIONS.PAYMENT_VERIFY)
+  @Idempotent()
   @ApiOperation({
     summary: 'Verify — the financial event',
     description:
@@ -395,6 +406,7 @@ export class PaymentsController {
 
   @Post(':id/allocate')
   @RequirePermission(PERMISSIONS.PAYMENT_ALLOCATE)
+  @Idempotent()
   @ApiOperation({
     summary: 'Apply a VERIFIED receipt across invoices',
     description:

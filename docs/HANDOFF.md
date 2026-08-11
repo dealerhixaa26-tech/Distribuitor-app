@@ -30,10 +30,10 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
 | **Branch** | `main` — clean, pushed |
-| **Size** | ~58,000 source lines · 82 tables · 17 migrations · 236 endpoints · **453 tests** |
+| **Size** | ~61,000 source lines · 82 tables · 17 migrations · 237 endpoints · **474 tests** |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
 
-Tests are 247 API · 196 contracts · **10 web** (the web suite exists as of Phase 11; before that
+Tests are 268 API · 196 contracts · **10 web** (the web suite exists as of Phase 11; before that
 `vitest run --passWithNoTests` ran nothing at all).
 
 ### Phase status
@@ -60,18 +60,24 @@ Phases were built 1→2→3→5→4→6→7: Phase 4 was skipped at the owner's 
 |---|---|
 | 11.1 Security review | ✅ `docs/31` — `/login` was an enumeration oracle past the lockout threshold; nodemailer 6→9 |
 | 11.2 Load test | ✅ `docs/32` — 69 MB of GIN index nothing could use; 1212 ms → 5.7 ms. ADR-0019 re-measured and STANDS |
-| **Create/edit forms** | 🟡 **Steps 0–2 done — `docs/33-phase-11-forms-foundation.md`.** Form kit + distributor create/edit + transitions. Steps 3–6 (product · price list · quotation · order · invoice issue · payment verify) NOT started |
+| **Create/edit forms** | 🟡 **`docs/33-phase-11-forms-foundation.md`.** Form kit · **distributor · customer · product · price list** create/edit, plus state transitions and the price-list slab editor. **Remaining: quotation · order · invoice issue · payment record/verify** |
+| Idempotency | ✅ **CLOSED** — `IdempotencyInterceptor`, 15 money-moving routes, `docs/33` §8 |
 | 11.3 Accessibility | ⬜ Deliberately after forms |
 | 11.4–11.6 Deployment | ⬜ Written UNEXECUTED against a documented target (no VPS; ADR-0023 precedent) |
 | 11.7 UAT · 11.8 launch | ⬜ |
 
-⚠️ **One obligation carried into Steps 4–6: idempotency does not exist.** `docs/03 §5` says it is
-*required* on `POST /orders`, `/payments`, `/invoices` and every `/approve`. The `idempotency_key`
-table, the error codes, the nightly purge job, the CORS allowance and `apiFetch`'s own option all
-exist — **no interceptor reads the header.** A double-clicked submit or a retry after the BFF's
-30-second timeout would create a second order or a second payment. Close it before those forms are
-built. `useEntityMutation` deliberately does not send the header, rather than imply a control that
-is not there (`docs/33` §2.6).
+✅ **Idempotency is now real.** `docs/03 §5` had promised it since Phase 0 with nothing implementing
+it — the table, the error code, the purge job, the CORS allowance and the client option all existed
+and the header was ignored. `IdempotencyInterceptor` now stores key + endpoint + body hash, replays
+the stored response with `Idempotency-Replayed: true`, and refuses a reused key carrying a different
+body. **It is the OUTERMOST interceptor** so it captures the enveloped, Decimal-as-string body the
+client received; reverse it and a replay returns a Decimal as a JSON number.
+
+⚠️ **The header is now REQUIRED on 15 routes**, so any caller that omits it gets a `422`. Mark a new
+money-moving endpoint with `@Idempotent()`; `idempotency-coverage.spec.ts` fails the build if one in
+the required set is missing it. Note the interceptor runs BEFORE the validation pipe — a smoke check
+posting an empty body to `/orders` or `/payments` without a key gets a `422` about the header and
+looks like it passed.
 
 ✅ **The worker is now observable.** It could not boot between Phase 6 and Phase 9 (`AuthModule`
 never imported), and — found in Phase 10 — **`pnpm dev` never started it at all**, because
@@ -380,6 +386,35 @@ picks its default up again. The billing-state field read empty on an edit form w
 had one — and that field decides place of supply, so saving would have posted an address without it.
 Use `Controller` for any select fed by a query.
 
+### 4.34 `apiFetch` returns TWO shapes, and a picker must handle both
+It unwraps the `{ data }` envelope for a single resource but returns the envelope whole when `meta`
+is present (§4.10). So a PAGINATED list yields `{ data, meta }` while a small reference lookup —
+`/territories`, `/categories`, `/geography/uoms`, `/geography/industries` — yields the **bare array**.
+Reading `.data` off both left every reference picker showing "No matches" against a `200 OK`, with
+nothing in the console. The territory picker shipped broken for exactly this reason.
+
+The shape also decides where filtering happens: a paginated endpoint has already applied `?q=`
+server-side; a bare array IS the whole list and the endpoint ignored `q`, so it must be filtered in
+the browser. `phase-11-forms-smoke.sh` pins which endpoints are which.
+
+### 4.35 A detail response needs an `editable` projection or its edit form destroys data
+Three times now — distributor, customer, product — the detail read model omitted fields the update
+DTO accepts. An edit form pre-filled from it shows blanks that read as "nothing on file", and saving
+writes them over real data, with a `200` both times. `product.uomId` was the sharpest: the summary
+carries only `uomCode`, so **every save would have unset the unit**.
+
+Add an `editable` block for any new editable entity, keep it OUT of the list projection (two address
+joins per row on a 100k table for columns the list never shows), and never include a decrypted
+secret — a blank field means "leave unchanged", which `update()` already honours for `undefined`.
+
+### 4.36 An interceptor that stores a response must be the OUTERMOST one
+Interceptor responses unwind outermost-last, so `IdempotencyInterceptor` is registered ahead of
+`TransformInterceptor` to capture the enveloped, Decimal-as-string body the client actually
+received. Reverse them and a replay returns a Decimal as a JSON number — ADR-0004's exact defect,
+reachable only on the retry path. Interceptors also run BEFORE pipes, so a missing
+`Idempotency-Key` is refused before body validation; a check expecting a validation `422` without a
+key passes for the wrong reason.
+
 ---
 
 ## 5. Architecture in one screen
@@ -496,16 +531,21 @@ Still unanswered from `docs/12-recommendations.md` §E:
 
 ## 8. Known gaps (deliberate, not forgotten)
 
-- **UI is mostly read-only — DISTRIBUTORS are now writable.** Create, edit, and every state
-  transition work end to end through the browser (`docs/33`). A form kit exists in
-  `apps/web/src/components/form/` — `Field`, `Select`, `EntityPicker`, `MoneyInput`/`DateInput`,
-  `FormDialog`/`ConfirmDialog`, `SubmitBar` — plus `lib/form-errors.ts` and
-  `lib/use-entity-mutation.ts` (`contractResolver`, `pruneEmpty`). **Still to build: product ·
-  price list · customer · quotation · order · invoice issue · payment record/verify.** Seven "New …"
-  buttons remain dead. Read ADR-0025 before adding one; §4.32 and §4.33 are the two traps that cost
-  a debugging round each.
-- **The periphery of the distributor record is still API-only**: KYC upload, agreements, notes,
-  contacts. Deliberate — the spine comes first.
+- **DISTRIBUTOR, CUSTOMER, PRODUCT and PRICE LIST are writable** end to end through the browser,
+  with state transitions and the price-list slab editor (`docs/33`). The form kit is in
+  `apps/web/src/components/form/` — `Field`, `Select`, `EntityPicker`, `AddressFields`,
+  `MoneyInput`/`QuantityInput`/`DateInput`, `FormDialog`/`ConfirmDialog`, `SubmitBar` — plus
+  `lib/form-errors.ts` and `lib/use-entity-mutation.ts` (`contractResolver`, `pruneEmpty`).
+  **Still to build: quotation · order · invoice issue · payment record/verify.** Read ADR-0025
+  before adding one; §4.32–4.35 are the traps that each cost a debugging round.
+- **Quotation and payment have no DETAIL page.** "Send a quotation" and "verify a payment" are
+  detail-page actions, so those pages are part of the remaining forms work, not separate from it.
+- **`price-list-items.tsx` is the precedent for the sales line editor** — `useFieldArray`, one
+  `EntityPicker` per row, `lineFields()` so an error on row 7 lands on row 7. The sales version adds
+  the live `POST /pricing/quote` preview and must never hold a price in the form (ADR-0011, §4.16).
+- **The periphery is still API-only**: distributor KYC/agreements/notes/contacts, product
+  specifications/media/BOM/variants, customer contacts, discount rules, tax rates. Deliberate — the
+  spine comes first.
 - **MFA** — schema, config, and contracts exist. Login **fails closed** if a user has
   `mfaEnabled`. TOTP itself is not implemented.
 - **Teams** — schema only, no CRUD.
@@ -558,14 +598,15 @@ The user expects, and has consistently valued:
   Phase 8 found three more bugs this way after a clean typecheck (`docs/24` §3), and Phase 9 found
   that **the worker had not booted for three phases** (§2 above).
   Three smoke suites live in `scripts/` — `phase-8-smoke.sh` (19), `phase-9-smoke.sh` (24), and
-  `phase-11-forms-smoke.sh` (26, which drives the **BFF on :3000** rather than the API, because
+  `phase-11-forms-smoke.sh` (48, which drives the **BFF on :3000** rather than the API, because
   that is the path a form takes and where the CSRF control turned out to be unreachable).
   Seven harnesses in `apps/api/src/scripts/`, run COMPILED (§4.28): `verify-worker-jobs` ·
   `verify-backup` · `verify-sheets-connection` · `verify-db-backup` · `verify-monitoring` ·
   `verify-scheduled-reports` · `verify-search-perf`.
   **Re-run them rather than trusting a completion record** — doing exactly that at the start of the
   forms work turned up six defects, two of them security-relevant, and one check that had never
-  executed since the day it was written (`docs/33` §2).
+  executed since the day it was written (`docs/33` §2) — then three more, including a picker that had
+  shipped silently empty (`docs/33` §10).
 - **Measure before building the fast version.** ADR-0019 dropped the materialised views `docs/08`
   §10 had specified in Phase 0, after timing the aggregates at 10× projected volume. A performance
   plan written before there is data to test it against is a hypothesis, not a decision.

@@ -12,19 +12,26 @@ import { applyServerErrors } from './form-errors';
 /**
  * One place where a form's submit meets the API.
  *
- * It does four things a form should not each reinvent: run the request, put the
- * server's refusals on the fields that caused them, invalidate exactly the
- * queries that are now stale, and tell the user it worked.
+ * It does five things a form should not each reinvent: run the request, make a
+ * retry safe, put the server's refusals on the fields that caused them,
+ * invalidate exactly the queries that are now stale, and tell the user it
+ * worked.
  *
- * ⚠️ It deliberately does NOT send an `Idempotency-Key`. `docs/03 §5` requires
- * one on `POST /orders`, `/payments`, `/invoices` and every `/approve`, and the
- * `idempotency_key` table, the `IDEMPOTENCY_*` error codes, the nightly purge
- * job, the CORS allowance and `apiFetch`'s own option all exist — but no
- * interceptor reads the header, so the server ignores it. Sending one would
- * dress an absent control as a present one, which is the failure this codebase
- * keeps finding. Until the interceptor lands, double submission is prevented
- * only by `isPending` disabling the button, which does not survive a retry
- * after the BFF's 30-second timeout.
+ * ## The idempotency key
+ *
+ * Generated once per form and held in a ref, NOT per submit. That is the whole
+ * point: if the first attempt times out at the BFF's thirty seconds and the
+ * user presses the button again, the second request must carry the SAME key so
+ * the server recognises it as the same act and replays the original result
+ * rather than creating a second payment. A key minted per click would make
+ * every retry a new request, which is exactly the hazard.
+ *
+ * A fresh key is minted after a success, so the next thing the user creates on
+ * a form they did not navigate away from is genuinely a new act.
+ *
+ * The server requires it on the money-moving routes (`docs/03 §5`,
+ * `IdempotencyInterceptor`) and ignores it elsewhere, so sending it on every
+ * mutation costs nothing and means no form has to know which is which.
  */
 
 /**
@@ -48,7 +55,11 @@ export function contractResolver<TValues extends FieldValues>(
 }
 
 export interface EntityMutationOptions<TValues extends FieldValues, TResult> {
-  mutationFn: (values: TValues) => Promise<TResult>;
+  /**
+   * The request. `idempotencyKey` is stable across retries of the same attempt
+   * — pass it straight through to `api.post`/`api.patch`.
+   */
+  mutationFn: (values: TValues, idempotencyKey: string) => Promise<TResult>;
 
   /** Errors are applied to these fields; anything else surfaces in the summary. */
   knownFields: readonly string[];
@@ -77,11 +88,20 @@ export function useEntityMutation<TValues extends FieldValues, TResult>({
   const [summary, setSummary] = React.useState<string | null>(null);
   const [unattributed, setUnattributed] = React.useState<string[]>([]);
 
+  // One key per attempt, surviving re-renders. State rather than a ref: the key
+  // IS part of this hook's state, the lazy initialiser means a form that is
+  // never submitted costs nothing, and `mutationFn` closes over the value from
+  // the render that called `mutate` — which is precisely the stability a retry
+  // depends on.
+  const [idempotencyKey, setIdempotencyKey] = React.useState(() => crypto.randomUUID());
+
   const mutation = useMutation({
-    mutationFn,
+    mutationFn: (values: TValues) => mutationFn(values, idempotencyKey),
     onSuccess: async (result) => {
       setSummary(null);
       setUnattributed([]);
+      // The act is finished. Anything created next on this form is a new one.
+      setIdempotencyKey(crypto.randomUUID());
 
       await Promise.all(
         invalidate.map((queryKey) => queryClient.invalidateQueries({ queryKey })),

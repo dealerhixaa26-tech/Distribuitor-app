@@ -68,10 +68,55 @@ check "an absent stateId still lists cities" 200 \
   "$(code "$API/geography/cities" -H "Authorization: Bearer $T")"
 
 echo "── The create endpoints forms will post to ──"
+# The key matters here: /orders and /payments now require one, and the
+# interceptor runs BEFORE the validation pipe. Without a key those two would
+# still answer 422 — for a missing header rather than an empty body — and the
+# check would pass while testing nothing it claims to test.
 for ep in distributors products price-lists quotations orders payments customers; do
   check "POST /$ep validates an empty body" 422 \
-    "$(code -X POST "$API/$ep" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' -d '{}')"
+    "$(code -X POST "$API/$ep" -H "Authorization: Bearer $T" -H "Idempotency-Key: $(uuidgen)" \
+       -H 'Content-Type: application/json' -d '{}')"
 done
+
+echo "── Idempotency, which until now was a table nothing wrote to (docs/03 §5) ──"
+IK=$(uuidgen)
+PAY_BODY="{\"distributorId\":\"$(curl -s "$API/distributors?limit=1" -H "Authorization: Bearer $T" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])')\",\"method\":\"UPI\",\"amount\":\"11.00\",\"referenceNumber\":\"IDEM-SMOKE\"}"
+check "a money-moving POST without a key is refused" 422 \
+  "$(code -X POST "$API/payments" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' -d "$PAY_BODY")"
+FIRST=$(curl -s -X POST "$API/payments" -H "Authorization: Bearer $T" -H "Idempotency-Key: $IK" \
+        -H 'Content-Type: application/json' -d "$PAY_BODY" \
+        | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["id"])')
+check "the first attempt creates a receipt" "yes" "$([ -n "$FIRST" ] && echo yes || echo no)"
+# The assertion that matters: the SAME id back, not merely a 2xx. A replay that
+# quietly created a second payment would also return 201.
+REPLAY=$(curl -s -X POST "$API/payments" -H "Authorization: Bearer $T" -H "Idempotency-Key: $IK" \
+         -H 'Content-Type: application/json' -d "$PAY_BODY" \
+         | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["id"])')
+check "a retry with the same key returns the SAME receipt" "$FIRST" "$REPLAY"
+check "and only ONE row exists for that reference" 1 \
+  "$(psql hixaa_dms_dev -tAc "SELECT count(*) FROM payment WHERE reference_number='IDEM-SMOKE';" | tr -d ' ')"
+check "the replay is announced in a header" "true" \
+  "$(curl -s -D - -o /dev/null -X POST "$API/payments" -H "Authorization: Bearer $T" \
+     -H "Idempotency-Key: $IK" -H 'Content-Type: application/json' -d "$PAY_BODY" \
+     | awk 'tolower($1)=="idempotency-replayed:"{print tolower($2)}' | tr -d '\r')"
+check "the same key with a DIFFERENT body is refused" 409 \
+  "$(code -X POST "$API/payments" -H "Authorization: Bearer $T" -H "Idempotency-Key: $IK" \
+     -H 'Content-Type: application/json' -d "${PAY_BODY/11.00/22.00}")"
+check "a fresh key creates a second receipt" 201 \
+  "$(code -X POST "$API/payments" -H "Authorization: Bearer $T" -H "Idempotency-Key: $(uuidgen)" \
+     -H 'Content-Type: application/json' -d "${PAY_BODY/IDEM-SMOKE/IDEM-SMOKE-2}")"
+# A rejected request must not burn the key, or a client-side typo would strand it.
+BADKEY=$(uuidgen)
+code -X POST "$API/payments" -H "Authorization: Bearer $T" -H "Idempotency-Key: $BADKEY" \
+  -H 'Content-Type: application/json' -d '{"method":"UPI"}' > /dev/null
+check "a key used by a REFUSED request is still usable" 201 \
+  "$(code -X POST "$API/payments" -H "Authorization: Bearer $T" -H "Idempotency-Key: $BADKEY" \
+     -H 'Content-Type: application/json' -d "${PAY_BODY/IDEM-SMOKE/IDEM-SMOKE-3}")"
+# Cleanup reports its own failure rather than hiding it (HANDOFF §4.29).
+DELETED=$(psql hixaa_dms_dev -tAc "DELETE FROM payment WHERE reference_number LIKE 'IDEM-SMOKE%' RETURNING 1;" | grep -c 1)
+check "the three probe receipts were cleaned up" 3 "$DELETED"
+psql hixaa_dms_dev -tAc "DELETE FROM idempotency_key WHERE endpoint LIKE '%payments%';" > /dev/null
 SK=$(curl -s -X POST "$API/auth/login" -H 'Content-Type: application/json' \
      -d '{"email":"west.storekeeper@hixaa.test","password":"storekeeper-nagpur-2026"}' \
      | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["accessToken"])')
@@ -94,9 +139,11 @@ else
   check "reactivating a PENDING_APPROVAL partner is refused" 409 \
     "$(code -X POST "$API/distributors/$PEND/reactivate" -H "Authorization: Bearer $T" \
        -H 'Content-Type: application/json' -d '{}')"
+  # /approve is idempotent (docs/03 §5), so a key is needed for the 409 to be
+  # the KYC refusal rather than a missing header.
   check "approving one without verified KYC is refused" 409 \
     "$(code -X POST "$API/distributors/$PEND/approve" -H "Authorization: Bearer $T" \
-       -H 'Content-Type: application/json' -d '{}')"
+       -H "Idempotency-Key: $(uuidgen)" -H 'Content-Type: application/json' -d '{}')"
   check "and it is still PENDING_APPROVAL afterwards" "PENDING_APPROVAL" \
     "$(curl -s "$API/distributors/$PEND" -H "Authorization: Bearer $T" \
        | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("data",d)["status"])')"
@@ -114,11 +161,73 @@ check "line errors carry an indexed path" "lines[0].productId" \
      -d '{"distributorId":"019fca7a-75fb-7933-90a7-3e8e0a1edb66","lines":[{"productId":"x","quantity":"1"}]}' \
      | python3 -c 'import sys,json;print(json.load(sys.stdin)["errors"][0]["field"])')"
 
+echo "── Reference lookups the catalogue forms depend on ──"
+check "GET /geography/uoms returns the seeded units" 10 \
+  "$(curl -s "$API/geography/uoms" -H "Authorization: Bearer $T" \
+     | python3 -c 'import sys,json;d=json.load(sys.stdin);d=d.get("data",d);print(len(d))')"
+check "and each carries its GST Unit Quantity Code" "yes" \
+  "$(curl -s "$API/geography/uoms" -H "Authorization: Bearer $T" \
+     | python3 -c 'import sys,json;d=json.load(sys.stdin);d=d.get("data",d);print("yes" if all(r.get("uqc") for r in d) else "no")')"
+
+# EntityPicker reads two different response shapes and filters differently for
+# each: a paginated endpoint has already applied ?q= server-side, a bare array
+# has not and must be filtered in the browser. Getting this wrong renders an
+# empty list against a 200 OK — which is what /territories did until it was
+# found. Pinned so a list endpoint that gains or loses pagination is noticed.
+echo "── The two list shapes EntityPicker distinguishes (§4.10) ──"
+shape() { curl -s "$API/$1" -H "Authorization: Bearer $T" \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);print("paginated" if isinstance(d,dict) and "meta" in d else "bare-array")'; }
+check "/distributors is paginated"            "paginated"  "$(shape 'distributors?limit=1')"
+check "/products is paginated"                "paginated"  "$(shape 'products?limit=1')"
+check "/territories is a bare array"          "bare-array" "$(shape territories)"
+check "/categories is a bare array"           "bare-array" "$(shape categories)"
+check "/geography/uoms is a bare array"       "bare-array" "$(shape geography/uoms)"
+check "/geography/industries is a bare array" "bare-array" "$(shape geography/industries)"
+
+# An edit form pre-fills from these. Drop one and the form shows a blank where
+# data exists, then saves the blank over it — silently, with a 200 both times.
+echo "── The editable projections the edit forms pre-fill from ──"
+editable() { curl -s "$API/$1" -H "Authorization: Bearer $T" \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin).get("data",{});e=d.get("editable");print(",".join(sorted(e)) if isinstance(e,dict) else "MISSING")'; }
+D1=$(curl -s "$API/distributors?limit=1" -H "Authorization: Bearer $T" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])')
+C1=$(curl -s "$API/customers?limit=1" -H "Authorization: Bearer $T" | python3 -c 'import sys,json;d=json.load(sys.stdin);d=d.get("data",d);print(d[0]["id"])')
+P1=$(curl -s "$API/products?limit=1" -H "Authorization: Bearer $T" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])')
+check "distributor detail carries one" \
+  "bankAccountName,bankIfsc,bankName,billingAddress,cin,msmeNumber,paymentTermsCode,shippingAddress,tan,website" \
+  "$(editable "distributors/$D1")"
+check "customer detail carries one" \
+  "billingAddress,notes,pan,shippingAddress,website" "$(editable "customers/$C1")"
+check "product detail carries one" \
+  "description,isPurchasable,isReturnable,isSellable,shortDescription,uomId,weightGrams" \
+  "$(editable "products/$P1")"
+# uomId is the one that would bite hardest: the summary carries only uomCode, so
+# without this an edit form has no id to send back and every save unsets the unit.
+check "and it includes uomId, not just uomCode" "yes" \
+  "$(curl -s "$API/products/$P1" -H "Authorization: Bearer $T" \
+     | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("yes" if "uomId" in d.get("editable",{}) else "no")')"
+
 echo "── The pricing preview the line editor renders (ADR-0011) ──"
 D=$(curl -s "$API/distributors?limit=1" -H "Authorization: Bearer $T" \
     | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])')
-P=$(curl -s "$API/products?limit=1" -H "Authorization: Bearer $T" \
-    | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])')
+# Taken from the DEFAULT price list rather than "whatever product sorts first".
+# The catalogue grew a product that is priced on a different list, and the
+# arbitrary pick started resolving to it — the check failed on correct API
+# behaviour, which is a fragile check rather than a bug.
+DEFAULT_PL=$(curl -s "$API/price-lists" -H "Authorization: Bearer $T" \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);d=d.get("data",d);print(next(p["id"] for p in d if p.get("isDefault")))')
+P=$(curl -s "$API/price-lists/$DEFAULT_PL/items" -H "Authorization: Bearer $T" \
+    | python3 -c 'import sys,json;d=json.load(sys.stdin);d=d.get("data",d);print(d[0]["productId"])')
+
+# The refusal above is worth keeping: a product with no price on the resolved
+# list must be REFUSED, never quietly quoted at zero.
+UNPRICED=$(curl -s "$API/products?q=BEACON&limit=1" -H "Authorization: Bearer $T" \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print(d[0]["id"] if d else "")')
+if [ -n "$UNPRICED" ]; then
+  UNPRICED_BODY="{\"distributorId\":\"$D\",\"lines\":[{\"productId\":\"$UNPRICED\",\"quantity\":\"1\"}]}"
+  check "a product absent from the resolved list is REFUSED, not priced at zero" 409 \
+    "$(code -X POST "$API/pricing/quote" -H "Authorization: Bearer $T" \
+       -H 'Content-Type: application/json' -d "$UNPRICED_BODY")"
+fi
 # Built into variables first, deliberately. Inside "$( … )" bash strips the
 # backslashes from \" while processing the OUTER double quotes, so the inner
 # command sees bare {…,…} and brace-expands one request into three — each a

@@ -3,6 +3,7 @@ import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { AppConfigModule } from './config/config.module';
 import { AppConfigService } from './config/app-config.service';
@@ -83,6 +84,11 @@ import { UsersModule } from './modules/users/users.module';
     HealthModule,
   ],
   providers: [
+    // Order matters. Interceptor responses unwind outermost-LAST, so this one
+    // must be registered ahead of TransformInterceptor to see — and therefore
+    // store — the enveloped, Decimal-as-string body the client actually got.
+    // Reverse them and a replay would return a Decimal as a JSON number.
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
     { provide: APP_INTERCEPTOR, useClass: TransformInterceptor },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],

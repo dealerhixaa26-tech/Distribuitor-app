@@ -56,9 +56,34 @@ interface EntityPickerProps {
   control: FieldControlProps;
 }
 
-interface ListResponse {
-  data: unknown[];
-  meta?: { cursor?: { hasMore?: boolean } };
+/**
+ * Two shapes come back from list endpoints, and the difference is load-bearing.
+ *
+ * `apiFetch` returns the whole envelope only when `meta` is present (§4.10), so
+ * a PAGINATED endpoint yields `{ data, meta }` while a small reference lookup —
+ * `/territories`, `/categories`, `/geography/uoms` — yields the bare array.
+ * Reading `.data` off both would leave every reference picker permanently
+ * showing "No matches" against a 200 OK, with nothing to see in the console.
+ *
+ * The distinction also decides where filtering happens. A paginated endpoint
+ * has already applied `?q=` server-side and may be hiding more rows. A bare
+ * array IS the whole list — the endpoint ignored `q` — so it must be filtered
+ * here, or typing would narrow nothing.
+ */
+type ListResponse = unknown[] | { data: unknown[]; meta?: { cursor?: { hasMore?: boolean } } };
+
+function readList(response: ListResponse | undefined): {
+  rows: unknown[];
+  paginated: boolean;
+  hasMore: boolean;
+} {
+  if (!response) return { rows: [], paginated: false, hasMore: false };
+  if (Array.isArray(response)) return { rows: response, paginated: false, hasMore: false };
+  return {
+    rows: response.data ?? [],
+    paginated: true,
+    hasMore: response.meta?.cursor?.hasMore ?? false,
+  };
 }
 
 export function EntityPicker({
@@ -112,11 +137,23 @@ export function EntityPicker({
     staleTime: 30_000,
   });
 
-  const options = React.useMemo(
-    () => (data?.data ?? []).map((row) => toOption(row as never)),
-    [data, toOption],
-  );
-  const hasMore = data?.meta?.cursor?.hasMore ?? false;
+  const { options, hasMore } = React.useMemo(() => {
+    const { rows, paginated, hasMore: more } = readList(data);
+    const all = rows.map((row) => toOption(row as never));
+    if (paginated || !debounced) return { options: all, hasMore: more };
+
+    // A bare array is the complete list and the endpoint ignored `q`, so the
+    // narrowing has to happen here.
+    const needle = debounced.toLowerCase();
+    return {
+      options: all.filter(
+        (option) =>
+          option.label.toLowerCase().includes(needle) ||
+          (option.hint?.toLowerCase().includes(needle) ?? false),
+      ),
+      hasMore: false,
+    };
+  }, [data, toOption, debounced]);
 
   const close = React.useCallback(() => {
     setOpen(false);

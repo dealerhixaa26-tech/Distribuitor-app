@@ -73,4 +73,32 @@ export class GeographyController {
         }),
     );
   }
+
+  /**
+   * Units of measure.
+   *
+   * Ten rows have been seeded since Phase 3 with nothing able to read them —
+   * `Product.uomId` was settable only through a direct API call, so the field
+   * was effectively unreachable from any interface. Lives here beside states
+   * and industries because it is the same kind of thing: small, static
+   * reference data every catalogue form needs.
+   *
+   * `uqc` is the GST Unit Quantity Code and travels with the row: it is what a
+   * GSTR-1 line must carry, so a form that picks a unit has already picked the
+   * code the return will report.
+   */
+  @Get('uoms')
+  @ApiOperation({ summary: 'Units of measure, with their GST Unit Quantity Codes' })
+  async uoms() {
+    return this.redis.remember(
+      CacheKeys.systemSettings('geography:uoms'),
+      this.config.cache.referenceTtl,
+      () =>
+        this.prisma.db.unitOfMeasure.findMany({
+          where: { isActive: true },
+          orderBy: { code: 'asc' },
+          select: { id: true, code: true, name: true, uqc: true, precision: true },
+        }),
+    );
+  }
 }
