@@ -161,6 +161,37 @@ check "line errors carry an indexed path" "lines[0].productId" \
      -d '{"distributorId":"019fca7a-75fb-7933-90a7-3e8e0a1edb66","lines":[{"productId":"x","quantity":"1"}]}' \
      | python3 -c 'import sys,json;print(json.load(sys.stdin)["errors"][0]["field"])')"
 
+echo "── The session survives the access token (middleware fallback) ──"
+# The route middleware asks "is there a session?". Its refresh-cookie fallback
+# could never fire — that cookie is scoped to /…/auth — so every navigation
+# more than ~15 minutes after sign-in bounced to /login mid-session. A marker
+# at Path=/ answers the question; it holds the literal 1 and no credential.
+MARKER_JAR=$(mktemp)
+curl -s -c "$MARKER_JAR" -X POST "$BFF/auth/login" -H 'Content-Type: application/json' \
+  -d '{"email":"admin@hixaa.com","password":"ChangeMe!Now#2026"}' -o /dev/null
+check "a session marker is set at Path=/" "/" \
+  "$(awk '$6=="hixaa_session"{print $3}' "$MARKER_JAR")"
+check "it outlives the access cookie" "yes" \
+  "$(awk '$6=="hixaa_session"{m=$5} $6=="hixaa_at"{a=$5} END{print (m>a)?"yes":"no"}' "$MARKER_JAR")"
+grep -v 'hixaa_at' "$MARKER_JAR" > "$MARKER_JAR.expired"
+check "a page still loads once the access cookie has gone" 200 \
+  "$(code -b "$MARKER_JAR.expired" http://localhost:3000/orders)"
+check "and a request with NO cookies is still redirected" 307 \
+  "$(code http://localhost:3000/orders)"
+rm -f "$MARKER_JAR" "$MARKER_JAR.expired"
+
+echo "── The invoice filter the allocation dialog depends on ──"
+DIST1=$(curl -s "$API/distributors?limit=1" -H "Authorization: Bearer $T" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])')
+check "outstandingOnly is accepted" 200 \
+  "$(code "$API/invoices?distributorId=$DIST1&outstandingOnly=true&limit=50" -H "Authorization: Bearer $T")"
+# Pinned because the dialog originally sent this and got a 422 it rendered as
+# "this party has no open invoices" — a wrong answer stated confidently.
+check "a CSV status list is REFUSED, so nothing may send one" 422 \
+  "$(code "$API/invoices?distributorId=$DIST1&status=ISSUED,PARTIALLY_PAID&limit=50" -H "Authorization: Bearer $T")"
+check "a single status is accepted" 200 \
+  "$(code "$API/invoices?distributorId=$DIST1&status=ISSUED&limit=50" -H "Authorization: Bearer $T")"
+
 echo "── Reference lookups the catalogue forms depend on ──"
 check "GET /geography/uoms returns the seeded units" 10 \
   "$(curl -s "$API/geography/uoms" -H "Authorization: Bearer $T" \

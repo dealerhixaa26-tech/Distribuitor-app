@@ -32,7 +32,10 @@ const PORTAL_DISTRIBUTOR = {
   legalName: 'Nagpur Industrial Automation Pvt Ltd',
   tradeName: 'Nagpur Automation',
   territoryName: 'Maharashtra',
-  gstin: '27AACCN1234F1Z8',
+  // Checksum-valid. It was …1Z8, which fails the GSTIN check digit, and
+  // issuing an invoice to this partner was refused outright — the buyer
+  // cannot claim input credit against a malformed GSTIN.
+  gstin: '27AACCN1234F1ZV',
   pan: 'AACCN1234F',
   creditLimit: '500000.0000',
   creditDays: 30,

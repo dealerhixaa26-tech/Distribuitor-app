@@ -11,6 +11,7 @@ import { TableSkeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ApiError, api } from '@/lib/api-client';
 import { formatDate, formatDateTime, formatMoney, humanizeEnum } from '@/lib/utils';
+import { OrderActions } from './order-actions';
 
 /**
  * Order detail.
@@ -92,7 +93,10 @@ export default function OrderDetailPage() {
   const params = useParams<{ id: string }>();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['order', params.id],
+    queryKey: ['orders', params.id],
+    // Plural, matching the list and every invalidation. It was ['order', id]
+    // — a singular key nothing invalidated, so an action succeeded, the toast
+    // fired, and the screen kept showing the state before it.
     // `apiFetch` already unwraps the single-resource envelope — HANDOFF §4.10.
     queryFn: () => api.get<OrderDetail>(`/orders/${params.id}`),
     enabled: Boolean(params.id),
@@ -135,6 +139,7 @@ export default function OrderDetailPage() {
             </span>
           </span>
         }
+        actions={<OrderActions orderId={data.id} status={data.status} type={data.type} />}
       />
 
       {/* A credit override is an exception the company knowingly took. It

@@ -14,6 +14,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 const ACCESS_COOKIE = 'hixaa_at';
 const REFRESH_COOKIE = process.env.SESSION_COOKIE_NAME ?? 'hixaa_rt';
+/** Presence marker at Path=/ — see `lib/bff/session.ts`. Carries no credential. */
+const SESSION_MARKER_COOKIE = 'hixaa_session';
 
 /** Reachable without a session. */
 const PUBLIC_ROUTES = [
@@ -28,9 +30,16 @@ export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
   // An access cookie may have expired while the refresh cookie is still good;
-  // the proxy will silently renew it, so either one counts as "has a session".
+  // the proxy will silently renew it, so any of these counts as "has a session".
+  //
+  // The REFRESH cookie is listed for completeness but cannot help here: it is
+  // scoped to `/…/auth`, so a request for `/orders/123` never carries it. That
+  // is why the marker exists — without it, every navigation more than fifteen
+  // minutes after sign-in redirected to /login mid-session.
   const hasSession =
-    request.cookies.has(ACCESS_COOKIE) || request.cookies.has(REFRESH_COOKIE);
+    request.cookies.has(ACCESS_COOKIE) ||
+    request.cookies.has(SESSION_MARKER_COOKIE) ||
+    request.cookies.has(REFRESH_COOKIE);
 
   const isPublic = PUBLIC_ROUTES.some(
     (route) => pathname === route || pathname.startsWith(`${route}/`),

@@ -76,7 +76,8 @@ export default function ProductDetailPage() {
   const params = useParams<{ id: string }>();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['product', params.id],
+    // Plural, matching the list and every invalidation.
+    queryKey: ['products', params.id],
     // `apiFetch` already unwraps the `{ data }` envelope for a single resource
     // (it only keeps the envelope when `meta` is present, i.e. for lists), so
     // this must NOT unwrap again.
