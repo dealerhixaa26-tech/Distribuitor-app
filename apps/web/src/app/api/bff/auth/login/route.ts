@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { apiUrl, forwardSetCookies, setAccessToken } from '@/lib/bff/session';
+import { apiUrl, forwardSetCookies, setAccessToken, setSessionMarker } from '@/lib/bff/session';
 
 /**
  * Login, handled explicitly rather than by the generic proxy.
@@ -58,6 +58,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   await setAccessToken(payload.data.accessToken, payload.data.expiresIn ?? 900);
+  // So the route middleware can still tell there is a session once the short
+  // access cookie has expired.
+  await setSessionMarker(upstream.headers);
 
   // The token is deliberately absent from what the browser receives.
   const { accessToken: _accessToken, expiresIn: _expiresIn, ...safe } = payload.data;

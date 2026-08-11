@@ -5,6 +5,8 @@ import { PERMISSIONS } from '@hixaa/contracts';
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { CalendarX, Download, FileText, Plus } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { DataTable } from '@/components/data-table/data-table';
 import { PageHeader } from '@/components/layout/page-header';
@@ -103,7 +105,8 @@ const columns: ColumnDef<QuotationSummary, unknown>[] = [
 ];
 
 export default function QuotationsPage() {
-  const { can } = usePermission();
+  const router = useRouter();
+    const { can } = usePermission();
   const [status, setStatus] = useState('');
 
   const { data, isLoading, error, refetch } = useQuery({
@@ -121,9 +124,11 @@ export default function QuotationsPage() {
         description="Hixaa's sales motion starts here — RFQ first, not reorder. Prices are resolved by the pricing engine and frozen onto each line."
         actions={
           can(PERMISSIONS.QUOTATION_CREATE) ? (
-            <Button>
-              <Plus aria-hidden="true" />
-              New quotation
+            <Button asChild>
+              <Link href="/quotations/new">
+                <Plus aria-hidden="true" />
+                New quotation
+              </Link>
             </Button>
           ) : null
         }
@@ -160,6 +165,7 @@ export default function QuotationsPage() {
             : null
         }
         totalCount={data?.meta.totalCount}
+        onRowClick={(row) => router.push(`/quotations/${row.id}`)}
         getRowId={(row) => row.id}
         caption="Quotations"
         emptyState={

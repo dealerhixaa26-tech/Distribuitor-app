@@ -77,12 +77,20 @@ echo "── Search: scoped, and typo-tolerant ──"
 check "typo 'raksah' still finds products" "yes" \
   "$(curl -s "$API/search?q=raksah" -H "Authorization: Bearer $T" \
      | python3 -c 'import sys,json;d=json.load(sys.stdin);d=d.get("data",d);print("yes" if d["totalHits"]>0 else "no")')"
-check "admin sees all 3 invoices" 3 \
-  "$(curl -s "$API/search?q=HTPL/INV" -H "Authorization: Bearer $T" \
-     | python3 -c 'import sys,json;d=json.load(sys.stdin);d=d.get("data",d);print(sum(len(g["hits"]) for g in d["groups"] if g["entity"]=="INVOICE"))')"
-check "scoped user sees only in-zone invoices" 2 \
-  "$(curl -s "$API/search?q=HTPL/INV" -H "Authorization: Bearer $SK" \
-     | python3 -c 'import sys,json;d=json.load(sys.stdin);d=d.get("data",d);print(sum(len(g["hits"]) for g in d["groups"] if g["entity"]=="INVOICE"))')"
+# Asserted as a RELATIONSHIP, not as literal counts. The counts were 3 and 2 —
+# a snapshot of the seed — so raising one more invoice failed a check about
+# scoping for a reason that had nothing to do with scoping. What actually
+# proves the control is that the scoped user sees FEWER than the admin and
+# still sees something: equal counts would mean no filtering, and zero would
+# mean the query is broken rather than scoped (HANDOFF §4.4).
+invoice_hits() { curl -s "$API/search?q=HTPL/INV" -H "Authorization: Bearer $1" \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);d=d.get("data",d);print(sum(len(g["hits"]) for g in d["groups"] if g["entity"]=="INVOICE"))'; }
+ADMIN_INV=$(invoice_hits "$T")
+SCOPED_INV=$(invoice_hits "$SK")
+check "a scoped user sees FEWER invoices than the admin" "yes" \
+  "$([ "$SCOPED_INV" -lt "$ADMIN_INV" ] && echo yes || echo "no ($SCOPED_INV vs $ADMIN_INV)")"
+check "and still sees the ones in their zone" "yes" \
+  "$([ "$SCOPED_INV" -gt 0 ] && echo yes || echo no)"
 
 echo "── Notifications ──"
 check "unread count returns" 200 "$(code "$API/notifications/unread-count" -H "Authorization: Bearer $T")"

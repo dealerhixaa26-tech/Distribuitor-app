@@ -503,3 +503,184 @@ left in place. They are the states UAT will spend its time in — a partner awai
 customer, a DRAFT product, a published list with two volume slabs — and two smoke checks now read
 them. They are hand-made rows, not seeded ones, so `pnpm db:reset` loses them and those checks fail
 loudly rather than passing silently. Promoting them to `prisma/seed/` remains the follow-up.
+
+---
+
+# Part 3 — the sales spine
+
+Quotation → order → invoice → payment. The remaining forms, and the walkthrough that proved them.
+
+## 14. What was built
+
+| Piece | Routes |
+|---|---|
+| **Sales line editor** | `components/form/sales-lines.tsx` — shared by quotation and order |
+| **Quotation** | `/quotations/new`, `/quotations/[id]` (new), `/quotations/[id]/edit` + send · accept · reject · revise · convert |
+| **Order** | `/orders/new`, `/orders/[id]/edit` + submit · approve · reject · cancel · reserve · **create invoice** |
+| **Invoice** | actions on the existing detail page: **issue** · send · cancel |
+| **Payment** | `/payments/new`, `/payments/[id]` (new), `/payments/[id]/edit` + verify · allocate · bounce |
+
+### The line editor shows a price it never holds
+
+Lines carry product, quantity, and an optional override with a mandatory reason — never a price
+(ADR-0011, §4.16). The totals come from `POST /pricing/quote`, the same engine that will price the
+saved document, debounced 400 ms. It renders the matched volume slab, the CGST/SGST-versus-IGST
+split, and any line that will need approval, so a salesperson sees the real number before
+submitting without the browser ever computing one.
+
+Measured: the preview showed ₹84,000 × 3 = ₹2,52,000 + ₹45,360 tax = **₹2,97,360**, and the saved
+quotation stored exactly that. Browser and server agree because there is only one engine.
+
+### An override is an input, not a bypass
+
+On an EDIT form the stored override price is deliberately **not** carried back into the field. The
+reason is shown so the editor knows a concession was granted, but re-submitting the form does not
+silently re-apply it — that would let an authorised exception become a permanent one nobody
+re-authorised.
+
+### The dangerous buttons say what they do
+
+`ConfirmDialog` requires a `consequence`. Issuing an invoice reads: *"allocates the next number from
+the gapless GST series… the number is consumed whether or not the invoice was correct — the only way
+back is a credit note."* That is the one irreversible button in the application, and "Are you sure?"
+would tell the user nothing they did not already know.
+
+## 15. Five more defects, four of them pre-existing
+
+### 15.1 🔴 Order and invoice detail pages used a query key nothing invalidated
+
+The lists use `['orders', …]`; the **detail** pages used `['order', id]` — singular. Every
+invalidation targets the plural prefix, so it never reached them. Submitting an order returned 200,
+the toast fired, and the screen kept showing the state from before, so the natural next move was to
+press the button again.
+
+Found by pressing Submit and watching the actions not change. Products had the same mismatch. All
+three are now plural, and no singular entity key remains.
+
+### 15.2 🔴 Every navigation logged the user out ~15 minutes after sign-in
+
+The route middleware asks "is there a session?" and falls back to the refresh cookie — but
+`hixaa_rt` is scoped to `/…/auth`, so a request for `/orders/123` never carries it. Once the
+~15-minute access cookie lapsed, every navigation redirected to `/login` while a valid 7-day refresh
+token sat in the browser.
+
+**Exactly the shape of ADR-0026**: a check reading a cookie the request never sends. Fixed with a
+`hixaa_session` marker at `Path=/` that holds the literal `1` — no credential, so widening its scope
+widens nothing worth stealing — expiring with the refresh token it stands in for. Asserted both
+ways: with the marker and no access cookie a page loads; with no cookies at all it still redirects.
+
+### 15.3 The invoice PDF button had never worked
+
+It pointed at `/api/v1/invoices/:id/pdf` on the **web** origin, which the browser cannot reach —
+`307` to `/login`. Only `/api/bff/…` is proxied. Now correct.
+
+### 15.4 The allocation dialog reported a failed query as "no open invoices"
+
+It filtered with `status=ISSUED,PARTIALLY_PAID,OVERDUE`; that parameter takes a single enum or an
+array and refuses CSV with a `422`. With `retry: false` the failure was invisible, and the dialog
+rendered its empty state — telling the user this party had nothing outstanding while holding an
+issued invoice for ₹2,97,360.
+
+Two fixes: use `outstandingOnly` (the server's own name for the collections worklist, which cannot
+drift the way an enumerated status list does), and render a failed query differently from an empty
+one. Both shapes are now pinned in the smoke suite.
+
+### 15.5 The seeded portal distributor's GSTIN failed its checksum
+
+`DIST-PORTAL-01` carried `27AACCN1234F1Z8`; the check digit should be `V`. Nothing complained — it
+seeded, listed, quoted, ordered, and reached an approved order with reserved stock. **Only issuing
+an invoice refused it**, correctly: a buyer cannot claim input credit against a malformed GSTIN.
+
+So the entire sell-in path was demonstrable and the last step was not, and nobody would have found
+that until UAT tried to bill someone. Fixed in the seed and in the database, and guarded by
+`seed-statutory-ids.spec.ts`, which validates every GSTIN/PAN literal in the seed source against the
+same validators the API uses — including an assertion that the sweep found something, because a
+sweep over an empty set passes vacuously.
+
+A related behaviour worth knowing: **a drafted invoice snapshots the buyer's GSTIN**, so correcting
+the master record did not fix the existing draft. The stale draft had to be deleted and re-created.
+That is correct — an invoice is a claim about a moment — but it means fixing party data does not
+repair documents already drafted from it.
+
+## 16. The whole spine, walked in the browser
+
+Every step through the real UI, every result read out of the database.
+
+```
+QT/2026-27-00004   ₹2,97,360   draft → sent → accepted
+        ↓ convert (re-priced on conversion)
+SO/2026-27-00006   submitted → approved   3 units reserved
+        ↓ create invoice
+HTPL/INV/2026-27/00004   draft → ISSUED   statutory number consumed
+        ↓ record receipt
+RCPT/2026-27/00031   ₹2,97,360 cheque 004521 → VERIFIED
+        ↓ allocate
+HTPL/INV/2026-27/00004   PAID   outstanding 0.0000
+```
+
+And the refusals, which are what actually verify a control (§4.4):
+
+| Attempt | Result |
+|---|---|
+| approve an order you created | `403` — "You cannot approve **an** order you created" |
+| verify a receipt you recorded | `403` — refused, dialog stays open with the reason |
+| CHEQUE with no cheque number | refused client-side, error on `chequeNumber` |
+| issue against a malformed GSTIN | `409`, naming the GSTIN and why it matters |
+| price a product absent from the list | `409 PRICE_NOT_FOUND`, never zero |
+
+`recorded_by_id <> verified_by_id` is **true** on the receipt, and the invoice moved to `PAID` with
+one ledger entry. The segregation of duties is not a claim in a document; it is a column comparison
+that holds.
+
+*(A small user-facing fix fell out of this: `SelfApprovalError` said "a order". The article now
+follows the noun that gets substituted.)*
+
+## 17. The gate, after part 3
+
+| | |
+|---|---|
+| `pnpm verify` | ✅ lint · typecheck · tests · build |
+| Tests | **483** — 272 API (21 suites), 196 contracts, 15 web |
+| Four `verify-*` harnesses | ✅ |
+| `phase-8-smoke.sh` | ✅ 19/19 |
+| `phase-9-smoke.sh` | ✅ 24/24 |
+| `phase-11-forms-smoke.sh` | ✅ **55/55** (was 48) |
+
+Two smoke checks were made **relational** rather than absolute along the way. `phase-9`'s invoice
+scoping asserted literal counts of 3 and 2 — a snapshot of the seed — so raising one more invoice
+failed a check about scoping for a reason that had nothing to do with scoping. It now asserts that
+a scoped user sees *fewer* than the admin and still sees *something*: equal counts would mean no
+filtering, zero would mean a broken query. The pricing preview check had the same fragility and got
+the same treatment.
+
+## 18. What is left
+
+The read-only UI is gone: **every entity on the sell-in path can now be created, edited and
+advanced through the browser.**
+
+Still API-only, deliberately:
+
+- **Shipments and dispatch** — `POST /shipments`, pack, dispatch, deliver. Serial capture happens at
+  dispatch (ADR-0009), which needs its own screen.
+- **Credit and debit notes** — the endpoints and numbering exist; no UI. This is the only way to
+  correct an issued invoice, so it is the most valuable remaining form.
+- **Inventory movements** — receipts, issues, adjustments, transfers, stock counts.
+- **Distributor KYC upload, agreements, notes, contacts**; product specifications, media, BOM,
+  variants; customer contacts; discount rules; tax rates; teams; bulk import.
+- **11.3 accessibility** — the kit was built with the audit in mind (`Field` wires
+  `aria-invalid`/`aria-describedby`, dialogs use Radix's focus management, the combobox follows ARIA
+  1.2), but it has not been audited.
+
+### ⚠️ Still the owner's call, unchanged
+
+`company.statutory` remains `{gstin: "27AAECH1234F1ZZ", verified: true}` — a placeholder with the
+refusal switch on. **Four** statutory numbers are now burned against it, one of them from this
+walkthrough. Before UAT reaches the issue form: answer E1, or set `verified` to `false` and reset
+the sequence. A gapless GST series cannot be renumbered.
+
+### Dev fixtures from the walkthrough
+
+`QT/2026-27-00004`, `SO/2026-27-00006`, `HTPL/INV/2026-27/00004` and `RCPT/2026-27/00031` form one
+complete worked example, left in place — a quotation through to a paid invoice, with the
+segregation of duties genuinely satisfied by two different users. Useful for UAT and for reading the
+screens against real data. Hand-made rows, not seeded ones, so `pnpm db:reset` loses them.

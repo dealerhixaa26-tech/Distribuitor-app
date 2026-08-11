@@ -30,10 +30,10 @@ not a flat SKU list. Source: hixaa.com, captured in `docs/00-domain-and-scope.md
 | **Repo** | `/Users/sidhant/hixaa-app-new` |
 | **Remote** | `https://github.com/dealerhixaa26-tech/Distribuitor-app.git` |
 | **Branch** | `main` — clean, pushed |
-| **Size** | ~61,000 source lines · 82 tables · 17 migrations · 237 endpoints · **474 tests** |
+| **Size** | ~66,000 source lines · 82 tables · 17 migrations · 238 endpoints · **483 tests** |
 | **Gate** | `pnpm verify` green (lint, typecheck, tests, build) |
 
-Tests are 268 API · 196 contracts · **10 web** (the web suite exists as of Phase 11; before that
+Tests are 272 API · 196 contracts · **15 web** (the web suite exists as of Phase 11; before that
 `vitest run --passWithNoTests` ran nothing at all).
 
 ### Phase status
@@ -60,11 +60,16 @@ Phases were built 1→2→3→5→4→6→7: Phase 4 was skipped at the owner's 
 |---|---|
 | 11.1 Security review | ✅ `docs/31` — `/login` was an enumeration oracle past the lockout threshold; nodemailer 6→9 |
 | 11.2 Load test | ✅ `docs/32` — 69 MB of GIN index nothing could use; 1212 ms → 5.7 ms. ADR-0019 re-measured and STANDS |
-| **Create/edit forms** | 🟡 **`docs/33-phase-11-forms-foundation.md`.** Form kit · **distributor · customer · product · price list** create/edit, plus state transitions and the price-list slab editor. **Remaining: quotation · order · invoice issue · payment record/verify** |
+| **Create/edit forms** | ✅ **DONE — `docs/33-phase-11-forms-foundation.md`.** The sell-in spine is writable end to end: distributor · customer · product · price list · **quotation · order · invoice issue · payment record/verify**, with every state transition. Proven by walking quotation → paid invoice in the browser |
 | Idempotency | ✅ **CLOSED** — `IdempotencyInterceptor`, 15 money-moving routes, `docs/33` §8 |
 | 11.3 Accessibility | ⬜ Deliberately after forms |
 | 11.4–11.6 Deployment | ⬜ Written UNEXECUTED against a documented target (no VPS; ADR-0023 precedent) |
 | 11.7 UAT · 11.8 launch | ⬜ |
+
+✅ **The UI is no longer read-only.** A quotation was raised, sent, accepted, converted to an order,
+approved by a second user, invoiced, issued as `HTPL/INV/2026-27/00004`, receipted and verified by a
+third — entirely through the browser, ending `PAID` with `recorded_by_id <> verified_by_id`. The
+line editor shows live pricing from `POST /pricing/quote` and never holds a price itself (ADR-0011).
 
 ✅ **Idempotency is now real.** `docs/03 §5` had promised it since Phase 0 with nothing implementing
 it — the table, the error code, the purge job, the CORS allowance and the client option all existed
@@ -415,6 +420,27 @@ reachable only on the retry path. Interceptors also run BEFORE pipes, so a missi
 `Idempotency-Key` is refused before body validation; a check expecting a validation `422` without a
 key passes for the wrong reason.
 
+### 4.37 One query-key convention, or an action succeeds and the screen never moves
+Lists used `['orders', …]`; the detail pages used `['order', id]`. Every invalidation targets the
+plural prefix, so it never reached them — submitting an order returned 200, the toast fired, and the
+screen kept showing the state from before, so the natural next move was to press the button again.
+Orders, invoices and products all had it. **Entity keys are PLURAL everywhere**, and a detail page
+shares the list's prefix so one invalidation covers both.
+
+### 4.38 A smoke check that asserts a literal COUNT fails for the wrong reason
+`phase-9` asserted "admin sees 3 invoices, scoped user sees 2" — a snapshot of the seed. Raising one
+more invoice failed a check about SCOPING for a reason that had nothing to do with scoping, and the
+temptation is then to edit the number rather than read the failure. Assert the RELATIONSHIP: the
+scoped user sees fewer than the admin AND more than zero. Equal counts mean no filtering; zero means
+a broken query. Same fix applied to the pricing preview check, which picked "whatever product sorts
+first" and broke when the catalogue grew.
+
+### 4.39 Fixing party data does not repair documents already drafted from it
+A drafted invoice SNAPSHOTS the buyer's GSTIN. Correcting the distributor's master record left the
+existing draft carrying the old one, and issuing it was still refused — the draft had to be deleted
+and re-created. Correct (an invoice is a claim about a moment, ADR-0011), and worth knowing before
+someone concludes the fix did not work.
+
 ---
 
 ## 5. Architecture in one screen
@@ -531,21 +557,21 @@ Still unanswered from `docs/12-recommendations.md` §E:
 
 ## 8. Known gaps (deliberate, not forgotten)
 
-- **DISTRIBUTOR, CUSTOMER, PRODUCT and PRICE LIST are writable** end to end through the browser,
-  with state transitions and the price-list slab editor (`docs/33`). The form kit is in
-  `apps/web/src/components/form/` — `Field`, `Select`, `EntityPicker`, `AddressFields`,
+- **The sell-in spine is fully writable** end to end through the browser — distributor, customer,
+  product, price list, quotation, order, invoice issue, payment record/verify, plus every state
+  transition (`docs/33`). The form kit is in `apps/web/src/components/form/`: `Field`, `Select`,
+  `EntityPicker`, `AddressFields`, `SalesLines` (live pricing, never holds a price),
   `MoneyInput`/`QuantityInput`/`DateInput`, `FormDialog`/`ConfirmDialog`, `SubmitBar` — plus
-  `lib/form-errors.ts` and `lib/use-entity-mutation.ts` (`contractResolver`, `pruneEmpty`).
-  **Still to build: quotation · order · invoice issue · payment record/verify.** Read ADR-0025
-  before adding one; §4.32–4.35 are the traps that each cost a debugging round.
-- **Quotation and payment have no DETAIL page.** "Send a quotation" and "verify a payment" are
-  detail-page actions, so those pages are part of the remaining forms work, not separate from it.
-- **`price-list-items.tsx` is the precedent for the sales line editor** — `useFieldArray`, one
-  `EntityPicker` per row, `lineFields()` so an error on row 7 lands on row 7. The sales version adds
-  the live `POST /pricing/quote` preview and must never hold a price in the form (ADR-0011, §4.16).
-- **The periphery is still API-only**: distributor KYC/agreements/notes/contacts, product
-  specifications/media/BOM/variants, customer contacts, discount rules, tax rates. Deliberate — the
-  spine comes first.
+  `lib/form-errors.ts` and `lib/use-entity-mutation.ts` (`contractResolver`, `pruneEmpty`,
+  idempotency key per attempt). Read ADR-0025 before adding a form; §4.32–4.39 are the traps that
+  each cost a debugging round.
+- **`price-list-items.tsx` and `sales-lines.tsx` are the two repeating-row precedents.** The second
+  adds the live `POST /pricing/quote` preview; neither ever posts a price.
+- **Still API-only, deliberately**: shipments and dispatch (serial capture at dispatch, ADR-0009,
+  needs its own screen); **credit and debit notes** — the only way to correct an issued invoice, so
+  the most valuable remaining form; inventory movements; distributor KYC/agreements/notes/contacts;
+  product specifications/media/BOM/variants; customer contacts; discount rules; tax rates; teams;
+  bulk import.
 - **MFA** — schema, config, and contracts exist. Login **fails closed** if a user has
   `mfaEnabled`. TOTP itself is not implemented.
 - **Teams** — schema only, no CRUD.
@@ -598,7 +624,7 @@ The user expects, and has consistently valued:
   Phase 8 found three more bugs this way after a clean typecheck (`docs/24` §3), and Phase 9 found
   that **the worker had not booted for three phases** (§2 above).
   Three smoke suites live in `scripts/` — `phase-8-smoke.sh` (19), `phase-9-smoke.sh` (24), and
-  `phase-11-forms-smoke.sh` (48, which drives the **BFF on :3000** rather than the API, because
+  `phase-11-forms-smoke.sh` (55, which drives the **BFF on :3000** rather than the API, because
   that is the path a form takes and where the CSRF control turned out to be unreachable).
   Seven harnesses in `apps/api/src/scripts/`, run COMPILED (§4.28): `verify-worker-jobs` ·
   `verify-backup` · `verify-sheets-connection` · `verify-db-backup` · `verify-monitoring` ·
@@ -606,7 +632,9 @@ The user expects, and has consistently valued:
   **Re-run them rather than trusting a completion record** — doing exactly that at the start of the
   forms work turned up six defects, two of them security-relevant, and one check that had never
   executed since the day it was written (`docs/33` §2) — then three more, including a picker that had
-  shipped silently empty (`docs/33` §10).
+  shipped silently empty (`docs/33` §10), and five more while walking the sales spine, including a
+  query key nothing invalidated and a middleware check that logged everyone out every fifteen
+  minutes (`docs/33` §15).
 - **Measure before building the fast version.** ADR-0019 dropped the materialised views `docs/08`
   §10 had specified in Phase 0, after timing the aggregates at 10× projected volume. A performance
   plan written before there is data to test it against is a hypothesis, not a decision.

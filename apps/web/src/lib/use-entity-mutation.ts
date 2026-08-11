@@ -169,7 +169,19 @@ export function pruneEmpty<T extends Record<string, unknown>>(values: T): Partia
     if (typeof value === 'number' && Number.isNaN(value)) continue;
 
     if (Array.isArray(value)) {
-      output[key] = value;
+      // Recursed into, not passed through. A repeating-row editor holds the
+      // same empty strings a flat form does — a line's untouched `notes` is
+      // `''`, and `mediumTextSchema` refuses that. Skipping arrays meant every
+      // quotation was rejected for a note nobody wrote.
+      //
+      // Positions are preserved: only empty KEYS within an element are
+      // dropped, never an element itself, because a line's index is what a
+      // server error path (`lines[2].quantity`) refers back to.
+      output[key] = value.map((item) =>
+        item && typeof item === 'object' && !Array.isArray(item)
+          ? pruneEmpty(item as Record<string, unknown>)
+          : item,
+      );
       continue;
     }
 

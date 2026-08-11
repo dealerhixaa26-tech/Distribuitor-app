@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Plus, ShieldAlert, ShoppingCart, TriangleAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useState } from 'react';
 import { DataTable } from '@/components/data-table/data-table';
 import { PageHeader } from '@/components/layout/page-header';
@@ -128,9 +129,11 @@ export default function OrdersPage() {
         description="Sell-in to distributors and sell-out to end customers. Approval reserves stock; anything unreserved is backordered."
         actions={
           can(PERMISSIONS.ORDER_CREATE) ? (
-            <Button>
-              <Plus aria-hidden="true" />
-              New order
+            <Button asChild>
+              <Link href="/orders/new">
+                <Plus aria-hidden="true" />
+                New order
+              </Link>
             </Button>
           ) : null
         }

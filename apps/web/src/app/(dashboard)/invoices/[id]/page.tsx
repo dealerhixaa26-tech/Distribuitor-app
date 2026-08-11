@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, Download, FileText, Receipt } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, FileText, Receipt } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ApiError, api } from '@/lib/api-client';
+import { InvoiceActions } from './invoice-actions';
 import { formatDate, formatMoney, humanizeEnum } from '@/lib/utils';
 
 /**
@@ -101,7 +102,10 @@ export default function InvoiceDetailPage() {
     // `apiFetch` already unwraps the `{ data }` envelope for a SINGLE resource —
     // it returns the envelope whole only when `meta` is present. Adding
     // `.then(r => r.data)` here yields undefined against a 200 (HANDOFF §4.10).
-    queryKey: ['invoice', id],
+    queryKey: ['invoices', id],
+    // Plural, matching the list and every invalidation. It was ['order', id]
+    // — a singular key nothing invalidated, so an action succeeded, the toast
+    // fired, and the screen kept showing the state before it.
     queryFn: () => api.get<InvoiceDetail>(`/invoices/${id}`),
   });
 
@@ -137,13 +141,7 @@ export default function InvoiceDetailPage() {
         title={data.number ?? 'Draft invoice'}
         description={`${data.counterpartyName} · ${data.counterpartyGstin ?? 'Unregistered'}`}
         actions={
-          <a
-            href={`/api/v1/invoices/${data.id}/pdf`}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
-          >
-            <Download className="size-4" aria-hidden="true" />
-            PDF
-          </a>
+          <InvoiceActions invoiceId={data.id} status={data.status} number={data.number} />
         }
       />
 

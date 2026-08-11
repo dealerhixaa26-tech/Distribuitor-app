@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { get, set } from 'react-hook-form';
 import { ApiError } from './api-client';
 import { applyServerErrors, lineFields, toFieldPath } from './form-errors';
+import { pruneEmpty } from './use-entity-mutation';
 
 /**
  * These assert that a server refusal REACHES a field — never merely that the
@@ -137,5 +138,46 @@ describe('lineFields', () => {
 
   it('expands to nothing when there are no rows', () => {
     expect(lineFields('lines', 0, ['productId'])).toEqual([]);
+  });
+});
+
+describe('pruneEmpty', () => {
+  it('drops empty strings, nulls, undefined and NaN', () => {
+    expect(pruneEmpty({ a: 'x', b: '', c: null, d: undefined, e: Number.NaN })).toEqual({ a: 'x' });
+  });
+
+  it('drops a nested object that is entirely empty, rather than posting {}', () => {
+    // A blank shipping address must not reach `addressSchema`, whose required
+    // fields would refuse it.
+    expect(pruneEmpty({ name: 'x', shippingAddress: { line1: '', cityName: '' } })).toEqual({
+      name: 'x',
+    });
+  });
+
+  it('recurses INTO array elements', () => {
+    // The defect this exists for: a line's untouched `notes` is '' and
+    // `mediumTextSchema` refuses it, so every quotation was rejected for a note
+    // nobody wrote.
+    expect(
+      pruneEmpty({ lines: [{ productId: 'p1', quantity: '3', notes: '', override: '' }] }),
+    ).toEqual({ lines: [{ productId: 'p1', quantity: '3' }] });
+  });
+
+  it('preserves array POSITION, because a server error path refers to the index', () => {
+    const pruned = pruneEmpty({
+      lines: [
+        { productId: 'a', notes: '' },
+        { productId: '', notes: '' },
+        { productId: 'c', notes: 'keep' },
+      ],
+    }) as { lines: unknown[] };
+
+    expect(pruned.lines).toHaveLength(3);
+    expect(pruned.lines[1]).toEqual({});
+    expect(pruned.lines[2]).toEqual({ productId: 'c', notes: 'keep' });
+  });
+
+  it('leaves primitive arrays alone', () => {
+    expect(pruneEmpty({ tags: ['a', 'b'] })).toEqual({ tags: ['a', 'b'] });
   });
 });

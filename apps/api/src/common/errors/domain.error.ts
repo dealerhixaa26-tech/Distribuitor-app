@@ -228,7 +228,11 @@ export class SelfApprovalError extends DomainError {
    * payment you recorded you created" the first time this was reused.
    */
   constructor(entity: string, action = 'approve', origin = 'created') {
-    super(`You cannot ${action} a ${entity} you ${origin}.`);
+    // "a order" reached a user-facing dialog. The article follows the noun that
+    // actually gets substituted, which is the whole reason `entity` is a
+    // parameter.
+    const article = /^[aeiou]/i.test(entity) ? 'an' : 'a';
+    super(`You cannot ${action} ${article} ${entity} you ${origin}.`);
   }
 }
 

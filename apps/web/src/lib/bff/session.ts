@@ -19,6 +19,22 @@ export const ACCESS_COOKIE = 'hixaa_at';
 export const REFRESH_COOKIE = process.env.SESSION_COOKIE_NAME ?? 'hixaa_rt';
 export const CSRF_COOKIE = 'csrf_token';
 
+/**
+ * A presence marker, and nothing else.
+ *
+ * The route middleware asks one question — "is there a session?" — and its
+ * fallback to the refresh cookie could never answer it: `hixaa_rt` is scoped to
+ * `/…/auth`, so a request for `/orders/123` does not carry it. The access
+ * cookie lives ~15 minutes, so every navigation after that redirected to
+ * `/login` while a perfectly good 7-day refresh token sat in the browser.
+ *
+ * Same shape of defect as ADR-0026: a check reading a cookie the request never
+ * sends. The fix is a marker at `Path=/` that carries NO credential — it holds
+ * the literal `1` — so widening its scope widens nothing worth stealing. It
+ * expires exactly with the refresh token it stands in for.
+ */
+export const SESSION_MARKER_COOKIE = 'hixaa_session';
+
 export const API_ORIGIN = process.env.API_INTERNAL_URL ?? 'http://localhost:4000';
 export const API_PREFIX = process.env.API_PREFIX ?? 'api/v1';
 
@@ -46,11 +62,37 @@ export async function setAccessToken(token: string, expiresInSeconds: number): P
   });
 }
 
+/**
+ * Mirrors the refresh cookie's lifetime onto the marker.
+ *
+ * Read from the upstream `Set-Cookie` rather than hardcoded, so "remember me
+ * for 30 days" and the ordinary 7-day session each get a marker that expires
+ * with them. A marker outliving its session would send someone to a dashboard
+ * that immediately 401s — the opposite failure, and just as annoying.
+ */
+export async function setSessionMarker(from: Headers): Promise<void> {
+  const raw = typeof from.getSetCookie === 'function' ? from.getSetCookie() : [];
+  const refresh = raw.find((cookie) => cookie.startsWith(`${REFRESH_COOKIE}=`));
+  if (!refresh) return;
+
+  const maxAge = Number(/Max-Age=(\d+)/i.exec(refresh)?.[1] ?? 0);
+  if (!maxAge) return;
+
+  (await cookies()).set(SESSION_MARKER_COOKIE, '1', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    maxAge,
+  });
+}
+
 export async function clearSessionCookies(): Promise<void> {
   const store = await cookies();
   store.delete(ACCESS_COOKIE);
   store.delete(REFRESH_COOKIE);
   store.delete(CSRF_COOKIE);
+  store.delete(SESSION_MARKER_COOKIE);
 }
 
 /** Serialises the browser's cookies for forwarding upstream. */

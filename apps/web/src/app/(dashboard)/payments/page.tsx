@@ -1,16 +1,21 @@
 'use client';
 
 import type { PaymentSummary } from '@hixaa/contracts';
+import { PERMISSIONS } from '@hixaa/contracts';
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Clock, Receipt } from 'lucide-react';
+import { Clock, Plus, Receipt } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { DataTable } from '@/components/data-table/data-table';
 import { PageHeader } from '@/components/layout/page-header';
+import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ApiError, api } from '@/lib/api-client';
+import { usePermission } from '@/lib/use-permission';
 import { formatCompactAmount, formatDate, humanizeEnum } from '@/lib/utils';
 
 interface PaymentsResponse {
@@ -96,6 +101,8 @@ const columns: ColumnDef<PaymentSummary, unknown>[] = [
 ];
 
 export default function PaymentsPage() {
+  const router = useRouter();
+  const { can } = usePermission();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
 
@@ -117,6 +124,16 @@ export default function PaymentsPage() {
       <PageHeader
         title="Payments"
         description="Recording a receipt is a memo with no financial effect. Verification — by someone other than the recorder — is what credits the ledger."
+        actions={
+          can(PERMISSIONS.PAYMENT_CREATE) ? (
+            <Button asChild>
+              <Link href="/payments/new">
+                <Plus aria-hidden="true" />
+                Record receipt
+              </Link>
+            </Button>
+          ) : null
+        }
       />
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -159,6 +176,7 @@ export default function PaymentsPage() {
             : null
         }
         totalCount={data?.meta.totalCount}
+        onRowClick={(row) => router.push(`/payments/${row.id}`)}
         getRowId={(row) => row.id}
         caption="Payments"
         emptyState={
