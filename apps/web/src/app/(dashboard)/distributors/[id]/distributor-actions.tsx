@@ -144,12 +144,20 @@ export function DistributorActions({
     setFailure(null);
   };
 
+  // One key per opened dialog, so pressing the button again after a timeout is
+  // the same act rather than a second approval. Reset when a dialog opens.
+  const idempotencyKey = React.useRef<string>('');
+
   const run = useMutation({
     mutationFn: (spec: ActionSpec) => {
       const body: Record<string, string> = {};
       if (spec.reason) body.reason = reason;
       if (spec.amount) body.creditLimit = amount;
-      return api.post(spec.path(distributorId), body);
+      // `/approve` requires one (docs/03 §5); the others ignore it, so there is
+      // no per-action list here to fall out of step with the server's.
+      return api.post(spec.path(distributorId), body, {
+        idempotencyKey: idempotencyKey.current,
+      });
     },
     onSuccess: async (_result, spec) => {
       // Prefix match — reaches both the list and ['distributors', id].
@@ -199,6 +207,7 @@ export function DistributorActions({
             setReason('');
             setAmount(creditLimit);
             setFailure(null);
+            idempotencyKey.current = crypto.randomUUID();
           }}
         >
           {spec.label}

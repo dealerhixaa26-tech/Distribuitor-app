@@ -5,9 +5,14 @@ import {
   createDistributorSchema,
   updateDistributorSchema,
 } from '@hixaa/contracts';
-import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { Controller, useForm } from 'react-hook-form';
+import {
+  AddressFields,
+  type AddressValues,
+  addressFieldPaths,
+  emptyAddress,
+} from '@/components/form/address-fields';
 import { EntityPicker } from '@/components/form/entity-picker';
 import { Field, FieldRow, FieldSet } from '@/components/form/field';
 import { MoneyInput } from '@/components/form/money-input';
@@ -34,17 +39,6 @@ import { contractResolver, pruneEmpty, useEntityMutation } from '@/lib/use-entit
 // on a field that exists here and surfaces everything else in the summary. A
 // field removed from the markup but left in this list would silently swallow
 // its own errors, so the two are kept adjacent deliberately.
-const ADDRESS_FIELDS = [
-  'line1',
-  'line2',
-  'landmark',
-  'cityName',
-  'stateId',
-  'postalCode',
-  'contactName',
-  'contactPhone',
-] as const;
-
 const KNOWN_FIELDS: readonly string[] = [
   'legalName',
   'tradeName',
@@ -65,16 +59,9 @@ const KNOWN_FIELDS: readonly string[] = [
   'bankAccountNumber',
   'bankIfsc',
   'bankName',
-  ...ADDRESS_FIELDS.map((field) => `billingAddress.${field}`),
-  ...ADDRESS_FIELDS.map((field) => `shippingAddress.${field}`),
+  ...addressFieldPaths('billingAddress'),
+  ...addressFieldPaths('shippingAddress'),
 ];
-
-interface StateRow {
-  id: string;
-  name: string;
-  code: string;
-  gstStateCode: string;
-}
 
 export interface DistributorFormValues {
   legalName: string;
@@ -99,28 +86,6 @@ export interface DistributorFormValues {
   billingAddress: AddressValues;
   shippingAddress: AddressValues;
 }
-
-interface AddressValues {
-  line1: string;
-  line2: string;
-  landmark: string;
-  cityName: string;
-  stateId: string;
-  postalCode: string;
-  contactName: string;
-  contactPhone: string;
-}
-
-const emptyAddress: AddressValues = {
-  line1: '',
-  line2: '',
-  landmark: '',
-  cityName: '',
-  stateId: '',
-  postalCode: '',
-  contactName: '',
-  contactPhone: '',
-};
 
 export const emptyDistributor: DistributorFormValues = {
   legalName: '',
@@ -187,17 +152,11 @@ export function DistributorForm({
 
   useUnsavedChangesWarning(isDirty);
 
-  const states = useQuery({
-    queryKey: ['geography', 'states'],
-    queryFn: () => api.get<StateRow[]>('/geography/states'),
-    staleTime: 60 * 60_000,
-  });
-
   const { submit, isPending, summary, unattributed, reset } = useEntityMutation<
     DistributorFormValues,
     { id: string; code: string; legalName: string }
   >({
-    mutationFn: (values) => {
+    mutationFn: (values, idempotencyKey) => {
       // Empty strings are pruned rather than sent: '' fails gstinSchema,
       // urlSchema and every other refined string, so an untouched optional
       // input would refuse a perfectly valid record. On edit this also means a
@@ -205,8 +164,8 @@ export function DistributorForm({
       // the plaintext never needs to leave the server.
       const body = pruneEmpty(values as unknown as Record<string, unknown>);
       return isEdit
-        ? api.patch(`/distributors/${distributorId}`, body)
-        : api.post('/distributors', body);
+        ? api.patch(`/distributors/${distributorId}`, body, { idempotencyKey })
+        : api.post('/distributors', body, { idempotencyKey });
     },
     knownFields: KNOWN_FIELDS,
     setError,
@@ -227,110 +186,6 @@ export function DistributorForm({
     const billing = watch('billingAddress');
     setValue('shippingAddress', { ...billing }, { shouldDirty: true, shouldValidate: true });
   };
-
-  const addressFields = (prefix: 'billingAddress' | 'shippingAddress') => (
-    <div className="space-y-4">
-      <Field
-        name={`${prefix}.line1`}
-        label="Address line 1"
-        error={errors[prefix]?.line1?.message}
-        required
-      >
-        {(control) => <Input {...control} {...register(`${prefix}.line1`)} />}
-      </Field>
-
-      <FieldRow>
-        <Field name={`${prefix}.line2`} label="Address line 2" error={errors[prefix]?.line2?.message}>
-          {(control) => <Input {...control} {...register(`${prefix}.line2`)} />}
-        </Field>
-        <Field
-          name={`${prefix}.landmark`}
-          label="Landmark"
-          error={errors[prefix]?.landmark?.message}
-        >
-          {(control) => <Input {...control} {...register(`${prefix}.landmark`)} />}
-        </Field>
-      </FieldRow>
-
-      <FieldRow>
-        <Field
-          name={`${prefix}.cityName`}
-          label="City"
-          error={errors[prefix]?.cityName?.message}
-          required
-          description="Free text — not every Indian town is in the reference list."
-        >
-          {(control) => <Input {...control} {...register(`${prefix}.cityName`)} />}
-        </Field>
-        <Field
-          name={`${prefix}.postalCode`}
-          label="PIN code"
-          error={errors[prefix]?.postalCode?.message}
-          required
-        >
-          {(control) => (
-            <Input {...control} inputMode="numeric" maxLength={6} {...register(`${prefix}.postalCode`)} />
-          )}
-        </Field>
-      </FieldRow>
-
-      <Field
-        name={`${prefix}.stateId`}
-        label="State"
-        error={errors[prefix]?.stateId?.message}
-        required
-        description="Decides the place of supply, and therefore CGST+SGST versus IGST."
-      >
-        {/* Controlled, not `register`d. The options arrive from the API AFTER
-            the first render, so an uncontrolled select is mounted with no
-            matching <option>, silently falls back to '', and never picks the
-            default up again — an edit form would show a blank state and save
-            the address without one. Found by loading an edit page, not by
-            reading this file. */}
-        {(fieldControl) => (
-          <Controller
-            control={control}
-            name={`${prefix}.stateId`}
-            render={({ field }) => (
-              <Select
-                {...fieldControl}
-                placeholder="Select a state…"
-                value={field.value}
-                onChange={field.onChange}
-                onBlur={field.onBlur}
-                disabled={states.isLoading}
-              >
-                {(states.data ?? []).map((state) => (
-                  <option key={state.id} value={state.id}>
-                    {state.name} ({state.gstStateCode})
-                  </option>
-                ))}
-              </Select>
-            )}
-          />
-        )}
-      </Field>
-
-      <FieldRow>
-        <Field
-          name={`${prefix}.contactName`}
-          label="Contact at this address"
-          error={errors[prefix]?.contactName?.message}
-        >
-          {(control) => <Input {...control} {...register(`${prefix}.contactName`)} />}
-        </Field>
-        <Field
-          name={`${prefix}.contactPhone`}
-          label="Contact phone"
-          error={errors[prefix]?.contactPhone?.message}
-        >
-          {(control) => (
-            <Input {...control} type="tel" inputMode="tel" {...register(`${prefix}.contactPhone`)} />
-          )}
-        </Field>
-      </FieldRow>
-    </div>
-  );
 
   return (
     <form onSubmit={onSubmit} className="max-w-3xl space-y-8 pb-4" noValidate>
@@ -595,7 +450,14 @@ export function DistributorForm({
         </FieldRow>
       </FieldSet>
 
-      <FieldSet legend="Billing address">{addressFields('billingAddress')}</FieldSet>
+      <FieldSet legend="Billing address">
+        <AddressFields
+          prefix="billingAddress"
+          control={control}
+          register={register}
+          errors={errors}
+        />
+      </FieldSet>
 
       <FieldSet legend="Shipping address">
         <button
@@ -605,7 +467,12 @@ export function DistributorForm({
         >
           Same as billing
         </button>
-        {addressFields('shippingAddress')}
+        <AddressFields
+          prefix="shippingAddress"
+          control={control}
+          register={register}
+          errors={errors}
+        />
       </FieldSet>
 
       <SubmitBar

@@ -1,7 +1,8 @@
-# Phase 11 — create/edit forms, part 1: foundation and distributors
+# Phase 11 — create/edit forms: foundation, distributors, and the catalogue
 
-> Steps 0–2 of the forms plan. What was found before building, what was built, and what is
-> deliberately still missing. Written after execution, not before.
+> Part 1 (§1–7): the form kit and distributors. Part 2 (§8–13): idempotency closed, then customer,
+> product and price list. What was found before building, what was built, and what is deliberately
+> still missing. Written after execution, not before.
 
 ---
 
@@ -19,8 +20,9 @@ The agreed scope for this pass was three steps:
 | **1** | A form kit — nine files, so thirteen later forms are assembly |
 | **2** | Distributor create/edit, plus the state-transition actions |
 
-Steps 3–6 (product · price list · quotation · order · invoice issue · payment verify) are **not**
-in this pass. §7 says what they need.
+Steps 3–6 (product · price list · quotation · order · invoice issue · payment verify) were **not**
+in that first pass. §7 says what they need; part 2 then closed idempotency and delivered customer,
+product and price list.
 
 Design reasoning is in **ADR-0025** (forms are routes, actions are dialogs) and **ADR-0026** (CSRF
 enforcement triggers on the CSRF cookie).
@@ -108,7 +110,11 @@ loading spinner means Radix's `Slot` receives two children. Fixed with `Slottabl
 broken for as long as the loading state has existed; no caller had exercised it until the "New
 distributor" button.
 
-### 2.6 ⚠️ Idempotency is documented, modelled, and entirely unimplemented — still open
+### 2.6 ✅ Idempotency was documented, modelled, and entirely unimplemented — now CLOSED
+
+> Closed in part 2. The finding as originally written is kept below because it is the clearest
+> statement of what was wrong; §8 describes the fix.
+
 
 `docs/03 §5` states idempotency is **required** on `POST /orders`, `/payments`, `/invoices` and
 every `/approve`. The `idempotency_key` table exists, so do the `IDEMPOTENCY_*` error codes, the
@@ -123,7 +129,7 @@ does **not** send an `Idempotency-Key`: sending one would dress an absent contro
 Double submission is currently prevented only by `isPending` disabling the button, which does not
 survive a page reload or a timeout.
 
-**Recommendation: close this before the order and payment forms are built.**
+**Recommendation: close this before the order and payment forms are built.** — done, see §8.
 
 ---
 
@@ -284,3 +290,216 @@ needs either E1 answered or `verified` set back to `false` and the sequence rese
 what `phase-11-forms-smoke.sh` §"an action is not a status transition" asserts against. It is a
 hand-made row, not a seeded one, so `pnpm db:reset` loses it and that smoke check fails loudly
 rather than silently passing. Promoting it to `prisma/seed/` is the follow-up.
+
+---
+
+# Part 2 — idempotency, and the catalogue forms
+
+Continuing the same pass: close §2.6, then customer + product + price list.
+
+## 8. Idempotency is now real
+
+`docs/03 §5` had promised it since Phase 0 and nothing implemented it. What existed was the whole
+apparatus around an absent control: the `idempotency_key` table, the `IDEMPOTENCY_KEY_REUSED` error,
+the nightly purge in `maintenance.processor.ts`, the CORS allowance, and `apiFetch`'s own option.
+The header was accepted and ignored.
+
+**`IdempotencyInterceptor`** now implements the documented contract: key + endpoint + a hash of the
+body are stored; a replay with the same key and body returns the **stored response** with
+`Idempotency-Replayed: true`; the same key with a different body is a `409`; keys expire after 24
+hours.
+
+Four decisions worth recording:
+
+**It is the OUTERMOST interceptor.** Interceptor responses unwind outermost-last, so registering it
+ahead of `TransformInterceptor` is what lets it store the body the client actually received —
+enveloped, with Decimals already rendered as strings. Storing the raw handler return would replay a
+Decimal as a JSON number and the replay would disagree with the original by a rounding error: the
+exact defect ADR-0004 exists to prevent, reachable only on the retry path.
+
+**The insert is the lock.** The row is written before the handler runs, so the unique index on
+`(key, userId, endpoint)` serialises concurrent attempts. A second request arriving while the first
+is in flight finds a row with no response yet and is refused rather than allowed to run in parallel.
+
+**A refused request does not burn the key.** The row is deleted when the handler throws, so a payment
+rejected for a bad amount is retryable with the same key once fixed. Remembering the failure would
+turn a typo into a dead key and push people toward a fresh key per attempt, defeating the mechanism.
+
+**Keys are hashed order-insensitively.** A client whose JSON serialiser reorders object keys on the
+retry is still recognised as the same request. Array order is preserved, because order is meaningful
+in a document's lines.
+
+### Which routes require it
+
+Marked with `@Idempotent()` — explicit, never inferred from the path. Matching `/approve` as a string
+would have missed `POST /payments/:id/verify`, which is the financial event (ADR-0018).
+
+The eight `docs/03 §5` names: `POST /orders`, `/orders/from-quotation/:id`, `/orders/:id/approve`,
+`/invoices`, `/invoices/from-order/:id`, `/invoices/from-shipment/:id`, `/payments`,
+`/distributors/:id/approve`.
+
+Seven more, **deliberately beyond the document** because they are the acts that actually consume a
+statutory number or post to the ledger: `/invoices/:id/issue`, `/credit-notes` and its `/issue`,
+`/debit-notes` and its `/issue`, `/payments/:id/verify`, `/payments/:id/allocate`. A duplicate here
+is worse than a duplicate DRAFT, and a gapless GST series cannot be renumbered (§4.19).
+
+`idempotency-coverage.spec.ts` reads the metadata back off the controllers — metadata, not source
+text, so a `@Idempotent` in a comment would not satisfy it. A new money endpoint that forgets the
+decorator fails the build.
+
+### Proven by execution, on a real receipt
+
+| Check | Result |
+|---|---|
+| money-moving POST with no key | `422`, naming the header |
+| first attempt | creates `IDEM-SMOKE` |
+| retry with the **same** key | returns the **same payment id** |
+| rows in `payment` for that reference | **1** |
+| replay response header | `Idempotency-Replayed: true` |
+| same key, **different** body | `409` |
+| fresh key | `201`, a second receipt |
+| key first used by a **refused** request | `201` — still usable |
+
+The third row is the assertion that matters. A replay that quietly created a second payment would
+also have returned `201`; only comparing the ids catches it.
+
+### What it broke, and why that was worth it
+
+Requiring the header is a breaking change for every existing caller. Three consequences, all fixed:
+
+- `phase-8-smoke.sh` — six POSTs now send a per-call key via an `idem()` helper.
+- `phase-11-forms-smoke.sh` — the "empty body → 422" checks for `/orders` and `/payments` now send a
+  key. Without one they would still have answered `422`, **for a missing header rather than an empty
+  body**, and passed while testing nothing they claimed to.
+- `useEntityMutation` sends a key on every mutation, generated **once per form** and held in state,
+  not per click. That is the whole point: a retry after the BFF's thirty-second timeout must carry
+  the same key. A fresh one is minted after each success.
+
+## 9. Customer, product, and price list
+
+| Form | Routes | Notes |
+|---|---|---|
+| **Customer** | `/customers/new`, `/customers/[id]/edit` | Unblocks `SECONDARY` orders |
+| **Product** | `/products/new`, `/products/[id]/edit` | HSN/SAC field follows the selected type |
+| **Price list** | `/price-lists/new`, `/price-lists/[id]`, `/price-lists/[id]/edit` | Detail page is new; publish/archive dialogs |
+| **Price list slabs** | on the detail page | First repeating-row editor — the pattern the order/quotation line editors will follow |
+
+**Reuse, not repetition.** The nine-field address block came out of `distributor-form.tsx` into
+`components/form/address-fields.tsx` and is now shared by both forms that embed `addressSchema`.
+Writing it twice would be two chances to diverge on `stateId`, which decides place of supply and
+therefore whether an invoice carries CGST+SGST or IGST.
+
+**The product form renders the contract's rule rather than restating it.** `superRefine` says a
+SERVICE is classified by SAC, everything else by HSN, never both — so the form shows one field or the
+other according to the selected type, and drops the unused code from the payload. Switching
+GOODS → SERVICE after typing an HSN would otherwise submit both and be refused by a rule the user
+cannot see.
+
+**`replaceAll` is surfaced, not assumed.** Merging leaves untouched slabs alone; replacing deletes
+everything absent from the submission, including rows someone else added since the page loaded. The
+warning says so when the box is ticked. Guessing either way silently discards prices.
+
+**ARCHIVED lists are read-only in the UI.** Editing one would rewrite what a past quotation was
+priced against — and every document snapshots its own pricing anyway (ADR-0011), so there is nothing
+to gain and a record to corrupt.
+
+## 10. Three more defects, all found by driving the UI
+
+### 10.1 🔴 `EntityPicker` was silently empty for every reference lookup
+
+`apiFetch` returns the whole envelope only when `meta` is present (§4.10). Paginated endpoints yield
+`{ data, meta }`; small reference lookups — `/territories`, `/categories`, `/geography/industries` —
+yield the **bare array**. The picker read `.data` off both, so every reference picker showed
+"No matches" against a `200 OK`, with nothing in the console to see.
+
+**This was already shipped**: the territory picker on the distributor form had been broken since the
+moment it was written, and the create form still worked because territory is optional.
+
+Fixed by reading both shapes. The distinction also decides where filtering happens: a paginated
+endpoint has already applied `?q=` server-side and may be hiding more rows; a bare array **is** the
+whole list and the endpoint ignored `q`, so it is filtered in the browser. Measured after the fix:
+18 territories listed, and typing `maha` narrows to one.
+
+`phase-11-forms-smoke.sh` now pins which endpoints are which shape, so a list endpoint that gains or
+loses pagination is noticed rather than quietly emptying a picker.
+
+### 10.2 `GET /geography/uoms` did not exist
+
+Ten units of measure have been seeded since Phase 3 with nothing able to read them, so
+`Product.uomId` was settable only by direct API call — effectively unreachable from any interface.
+Added beside `/geography/states` and `/industries`, carrying each unit's GST Unit Quantity Code,
+which is what a GSTR-1 line must report.
+
+### 10.3 The `editable` projection gap, for the third time
+
+Distributor, then customer, then product: the detail response omits fields the update DTO accepts, so
+an edit form pre-filled from it shows blanks that read as "nothing on file" and saves them over real
+data. Each now returns an `editable` block.
+
+`product.uomId` was the sharpest case — the summary carries only `uomCode`, so an edit form had no id
+to send back and **every save would have unset the unit**. All three projections are now asserted in
+the smoke suite by their exact field lists.
+
+## 11. Proven end to end
+
+The three forms were driven in a browser and the results read out of the database — then the chain
+was checked against the pricing engine, which is the point of building them.
+
+```
+CUST-00003  Koradi Thermal Power Station · INDUSTRIAL · territory=Maharashtra
+            billing  -> Koradi Power House Road, Koradi 441111 [Maharashtra]
+            shipping -> NULL — blank dropped whole, not posted as {}
+
+HTPL-RAKSHA-BEACON  Raksha Confined-Space Beacon · GOODS · DRAFT
+                    hsn=85311020  sac=NULL  gst=18.00  serial=true  warranty=24  wt=450
+
+PILOT-2026  Pilot Price List 2026-27 · DRAFT → ACTIVE (published through the dialog)
+            slab minQty=1   price=18500  floor=15000
+            slab minQty=10  price=16750  floor=14000
+```
+
+Then `POST /pricing/quote` against that list:
+
+| Quantity | Unit | Slab matched | Tax | Line total |
+|---|---|---|---|---|
+| 1 | 18 500.0000 | ≥ 1 | 3 330.0000 | 21 830.0000 |
+| 10 | 16 750.0000 | ≥ 10 | 30 150.0000 | 197 650.0000 |
+
+A product created through a form, priced through a list created and populated through a form,
+resolving at the correct volume slab with the correct GST split. And the negative case, which is the
+one that matters: a product **absent** from the resolved list is refused with `409 PRICE_NOT_FOUND`,
+never quietly quoted at zero — now asserted in the smoke suite.
+
+## 12. The gate, after part 2
+
+| | |
+|---|---|
+| `pnpm verify` | ✅ lint · typecheck · tests · build |
+| Tests | **474** — 268 API (20 suites), 196 contracts, 10 web |
+| Four `verify-*` harnesses | ✅ |
+| `phase-8-smoke.sh` | ✅ 19/19 |
+| `phase-9-smoke.sh` | ✅ 24/24 |
+| `phase-11-forms-smoke.sh` | ✅ **48/48** (was 26) |
+
+## 13. Still not done
+
+- **Quotation, order, invoice issue, payment record/verify** — the remaining spine. Quotation and
+  payment still have no detail page, and those pages are part of the work.
+- **The line editor** is the largest remaining component, but `price-list-items.tsx` is now the
+  working precedent: `useFieldArray`, one `EntityPicker` per row, `lineFields()` so an error on row 7
+  lands on row 7. The sales version adds the live `POST /pricing/quote` preview and must never carry
+  a price in the form (ADR-0011, §4.16).
+- **Product periphery** — specifications, media, BOM, variants — still API-only, as are distributor
+  KYC/agreements/notes/contacts and customer contacts.
+- **Discount rules and tax rates** have no UI.
+- **The invoice-issue warning in §7 stands unchanged.** `company.statutory.verified` is still `true`
+  against placeholder numbers with three statutory numbers already burned. That is an owner decision
+  before UAT reaches the issue form, not a code change.
+
+### Dev fixtures created while verifying
+
+`DIST-00003`, `CUST-00003`, `HTPL-RAKSHA-BEACON` and `PILOT-2026` were all made through the UI and
+left in place. They are the states UAT will spend its time in — a partner awaiting approval, an end
+customer, a DRAFT product, a published list with two volume slabs — and two smoke checks now read
+them. They are hand-made rows, not seeded ones, so `pnpm db:reset` loses them and those checks fail
+loudly rather than passing silently. Promoting them to `prisma/seed/` remains the follow-up.

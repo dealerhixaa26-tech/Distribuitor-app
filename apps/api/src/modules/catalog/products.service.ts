@@ -163,7 +163,25 @@ export class ProductsService {
   async findDetail(id: string) {
     const summary = await this.findById(id);
 
-    const [specifications, media, bom, variants, prices] = await Promise.all([
+    const [editable, specifications, media, bom, variants, prices] = await Promise.all([
+      // Fields the update DTO accepts that the summary omits — the third time
+      // this pattern appears (distributor, customer, product), and for the same
+      // reason each time: an edit form pre-filled from the summary shows blanks
+      // that read as "nothing set", and saving then clears real data.
+      // `uomId` matters most: the summary carries only `uomCode`, so an edit
+      // form had no id to send back and every save would have unset the unit.
+      this.prisma.db.product.findFirst({
+        where: { id },
+        select: {
+          uomId: true,
+          shortDescription: true,
+          description: true,
+          isReturnable: true,
+          isPurchasable: true,
+          isSellable: true,
+          weightGrams: true,
+        },
+      }),
       this.prisma.db.productSpecification.findMany({
         where: { productId: id },
         orderBy: [{ groupName: 'asc' }, { sortOrder: 'asc' }],
@@ -213,6 +231,15 @@ export class ProductsService {
 
     return {
       ...summary,
+      editable: {
+        uomId: editable?.uomId ?? null,
+        shortDescription: editable?.shortDescription ?? null,
+        description: editable?.description ?? null,
+        isReturnable: editable?.isReturnable ?? true,
+        isPurchasable: editable?.isPurchasable ?? true,
+        isSellable: editable?.isSellable ?? true,
+        weightGrams: editable?.weightGrams ? editable.weightGrams.toFixed(4) : null,
+      },
       specifications,
       media: media.map((item) => ({
         ...item,

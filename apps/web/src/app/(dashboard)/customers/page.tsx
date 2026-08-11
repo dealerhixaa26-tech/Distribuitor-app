@@ -5,6 +5,8 @@ import { PERMISSIONS } from '@hixaa/contracts';
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Plus, Users } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { DataTable } from '@/components/data-table/data-table';
 import { PageHeader } from '@/components/layout/page-header';
@@ -82,6 +84,7 @@ const columns: ColumnDef<CustomerSummary, unknown>[] = [
 ];
 
 export default function CustomersPage() {
+  const router = useRouter();
   const { can, scopeType } = usePermission();
   const [search, setSearch] = useState('');
 
@@ -100,9 +103,11 @@ export default function CustomersPage() {
         description="End customers — plants, mines, government bodies. Distinct from distributors, which are channel partners."
         actions={
           can(PERMISSIONS.CUSTOMER_CREATE) ? (
-            <Button>
-              <Plus aria-hidden="true" />
-              New customer
+            <Button asChild>
+              <Link href="/customers/new">
+                <Plus aria-hidden="true" />
+                New customer
+              </Link>
             </Button>
           ) : null
         }
@@ -139,6 +144,7 @@ export default function CustomersPage() {
             : null
         }
         totalCount={data?.meta.totalCount}
+        onRowClick={(row) => router.push(`/customers/${row.id}/edit`)}
         getRowId={(row) => row.id}
         caption="Customers"
         emptyState={

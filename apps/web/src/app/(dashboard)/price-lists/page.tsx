@@ -5,6 +5,8 @@ import { PERMISSIONS } from '@hixaa/contracts';
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Plus, Star, Tags } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { DataTable } from '@/components/data-table/data-table';
 import { PageHeader } from '@/components/layout/page-header';
@@ -88,6 +90,7 @@ const columns: ColumnDef<PriceListSummary, unknown>[] = [
 ];
 
 export default function PriceListsPage() {
+  const router = useRouter();
   const { can } = usePermission();
   const [status, setStatus] = useState('');
   const [cursor, setCursor] = useState<string | undefined>();
@@ -108,9 +111,11 @@ export default function PriceListsPage() {
         description="Versioned, date-effective, GST-exclusive. A price revision is a clone-and-publish, never an edit to a live list."
         actions={
           can(PERMISSIONS.PRICELIST_CREATE) ? (
-            <Button>
-              <Plus aria-hidden="true" />
-              New price list
+            <Button asChild>
+              <Link href="/price-lists/new">
+                <Plus aria-hidden="true" />
+                New price list
+              </Link>
             </Button>
           ) : null
         }
@@ -153,6 +158,7 @@ export default function PriceListsPage() {
         cursor={data?.meta.cursor}
         totalCount={data?.meta.totalCount}
         canGoBack={history.length > 0}
+        onRowClick={(row) => router.push(`/price-lists/${row.id}`)}
         getRowId={(row) => row.id}
         onNextPage={() => {
           if (!data?.meta.cursor.next) return;

@@ -31,6 +31,21 @@ import { NumberSequenceService } from '../distributors/number-sequence.service';
  * Territory-scoped, so a territory-scoped user sees only the customers in their
  * own subtree — registered in SCOPE_REGISTRY as `byTerritory()`.
  */
+/** Exactly the leaves `addressSchema` accepts — see the distributor's twin. */
+const CUSTOMER_ADDRESS_SELECT = {
+  label: true,
+  line1: true,
+  line2: true,
+  landmark: true,
+  cityId: true,
+  cityName: true,
+  stateId: true,
+  postalCode: true,
+  countryCode: true,
+  contactName: true,
+  contactPhone: true,
+} satisfies Prisma.AddressSelect;
+
 const CUSTOMER_SELECT = {
   id: true,
   code: true,
@@ -110,7 +125,22 @@ export class CustomersService {
   async findDetail(id: string) {
     const summary = await this.findById(id);
 
-    const [contacts, recentOrders] = await Promise.all([
+    const [editable, contacts, recentOrders] = await Promise.all([
+      // The fields the update DTO accepts but the summary omits, so an edit
+      // form is pre-filled with what is stored rather than showing blanks that
+      // read as "nothing on file". Same shape as the distributor's, and kept
+      // out of CUSTOMER_SELECT for the same reason: that projection also serves
+      // the list, and two address joins per row is a cost the list never uses.
+      this.prisma.db.customer.findFirst({
+        where: { id },
+        select: {
+          pan: true,
+          website: true,
+          notes: true,
+          billingAddress: { select: CUSTOMER_ADDRESS_SELECT },
+          shippingAddress: { select: CUSTOMER_ADDRESS_SELECT },
+        },
+      }),
       this.prisma.db.customerContact.findMany({
         where: { customerId: id },
         orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }],
@@ -140,6 +170,13 @@ export class CustomersService {
 
     return {
       ...summary,
+      editable: {
+        pan: editable?.pan ?? null,
+        website: editable?.website ?? null,
+        notes: editable?.notes ?? null,
+        billingAddress: editable?.billingAddress ?? null,
+        shippingAddress: editable?.shippingAddress ?? null,
+      },
       contacts,
       recentOrders: recentOrders.map((order) => ({
         ...order,

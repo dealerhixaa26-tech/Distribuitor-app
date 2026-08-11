@@ -32,6 +32,7 @@ import {
 import { zodBody, zodParam, zodQuery } from '../../common/pipes/zod-validation.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
+import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { DistributorKycService } from './distributor-kyc.service';
 import { DistributorRelationsService } from './distributor-relations.service';
 import { DistributorsService } from './distributors.service';
@@ -111,6 +112,7 @@ export class DistributorsController {
 
   @Post(':id/approve')
   @RequirePermission(PERMISSIONS.DISTRIBUTOR_APPROVE)
+  @Idempotent()
   @ApiOperation({
     summary: 'Approve a distributor (→ ACTIVE)',
     description:
